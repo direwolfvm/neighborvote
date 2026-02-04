@@ -215,41 +215,5 @@ export const memberLoginTokens = pgTable(
   ]
 );
 
-export const memberLoginTokens = pgTable(
-  "member_login_tokens",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    memberId: uuid("member_id")
-      .notNull()
-      .references(() => members.id, { onDelete: "cascade" }),
-    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
-    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
-    usedAt: timestamp("used_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
-  },
-  (table) => [
-    unique("member_login_tokens_token_hash_unique").on(table.tokenHash),
-    index("member_login_tokens_member_idx").on(table.memberId)
-  ]
-);
-
-export const memberLoginTokens = pgTable(
-  "member_login_tokens",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    memberId: uuid("member_id")
-      .notNull()
-      .references(() => members.id, { onDelete: "cascade" }),
-    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
-    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
-    usedAt: timestamp("used_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
-  },
-  (table) => [
-    unique("member_login_tokens_token_hash_unique").on(table.tokenHash),
-    index("member_login_tokens_member_idx").on(table.memberId)
-  ]
-);
-
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
