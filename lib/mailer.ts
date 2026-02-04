@@ -7,13 +7,17 @@ interface SendEmailParams {
   html?: string;
 }
 
-async function sendWithSendGrid(params: SendEmailParams) {
-  const apiKey = process.env.SENDGRID_API_KEY;
-  const from = process.env.MAIL_FROM;
-
-  if (!apiKey || !from) {
-    throw new Error("SENDGRID_API_KEY and MAIL_FROM are required");
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
   }
+  return value;
+}
+
+async function sendWithSendGrid(params: SendEmailParams) {
+  const apiKey = requiredEnv("SENDGRID_API_KEY");
+  const from = requiredEnv("MAIL_FROM");
 
   const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
     method: "POST",
@@ -38,12 +42,43 @@ async function sendWithSendGrid(params: SendEmailParams) {
   }
 }
 
-export async function sendEmail(params: SendEmailParams): Promise<void> {
-  const provider = (process.env.MAIL_PROVIDER ?? "sendgrid").toLowerCase();
-  if (provider === "sendgrid") {
-    await sendWithSendGrid(params);
-    return;
+async function sendWithMailgun(params: SendEmailParams) {
+  const apiKey = requiredEnv("MAILGUN_API_KEY");
+  const domain = requiredEnv("MAILGUN_DOMAIN");
+  const from = requiredEnv("MAIL_FROM");
+  const apiBase = process.env.MAILGUN_API_BASE_URL ?? "https://api.mailgun.net";
+
+  const body = new URLSearchParams({
+    from,
+    to: params.to,
+    subject: params.subject,
+    text: params.text
+  });
+
+  if (params.html) {
+    body.set("html", params.html);
   }
+
+  const basicAuth = Buffer.from(`api:${apiKey}`).toString("base64");
+  const response = await fetch(`${apiBase}/v3/${domain}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: body.toString()
+  });
+
+  if (!response.ok) {
+    const responseBody = await response.text();
+    throw new Error(`Mailgun error: ${response.status} ${responseBody}`);
+  }
+}
+
+export async function sendEmail(params: SendEmailParams): Promise<void> {
+  const provider = (process.env.MAIL_PROVIDER ?? "mailgun").toLowerCase();
+  if (provider === "mailgun") return sendWithMailgun(params);
+  if (provider === "sendgrid") return sendWithSendGrid(params);
 
   throw new Error(`Unsupported MAIL_PROVIDER: ${provider}`);
 }

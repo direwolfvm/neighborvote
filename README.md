@@ -18,7 +18,7 @@ This scaffold includes:
 - Drizzle ORM
 - Zod
 - Tailwind CSS
-- SendGrid email delivery
+- Mailgun email delivery (SendGrid fallback supported)
 
 ## Local development
 
@@ -64,9 +64,12 @@ npm run dev
 - `APP_BASE_URL`: base URL used in email links
 - `ADMIN_EMAILS`: comma-separated admin allowlist (case-insensitive)
 - `ADMIN_SESSION_SECRET`: at least 32 characters; signs admin session cookies
-- `MAIL_PROVIDER`: currently `sendgrid`
+- `MAIL_PROVIDER`: `mailgun` (or `sendgrid`)
 - `MAIL_FROM`: sender email
-- `SENDGRID_API_KEY`: SendGrid API key
+- `MAILGUN_API_KEY`: Mailgun API key
+- `MAILGUN_DOMAIN`: Mailgun domain (for example `mg.example.com`)
+- `MAILGUN_API_BASE_URL`: optional; defaults to `https://api.mailgun.net`
+- `SENDGRID_API_KEY`: optional, only if `MAIL_PROVIDER=sendgrid`
 - `GCS_EXPORT_BUCKET`: Cloud Storage bucket for export bundles (next phase)
 
 ## Routes
@@ -139,7 +142,8 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 
 Create or update these Secret Manager secrets:
 - `DATABASE_URL`
-- `SENDGRID_API_KEY`
+- `MAILGUN_API_KEY`
+- `MAILGUN_DOMAIN`
 - `MAIL_FROM`
 - `ADMIN_EMAILS`
 - `ADMIN_SESSION_SECRET`
@@ -154,7 +158,8 @@ Example secret creation:
 
 ```bash
 printf '%s' 'postgres://<DB_USER>:<DB_PASSWORD>@/neighborvote?host=/cloudsql/permitting-ai-helper:us-east4:metabase-sql' | gcloud secrets create DATABASE_URL --data-file=- || true
-printf '%s' '<sendgrid-api-key>' | gcloud secrets create SENDGRID_API_KEY --data-file=- || true
+printf '%s' '<mailgun-api-key>' | gcloud secrets create MAILGUN_API_KEY --data-file=- || true
+printf '%s' 'mg.example.com' | gcloud secrets create MAILGUN_DOMAIN --data-file=- || true
 printf '%s' 'no-reply@your-domain.com' | gcloud secrets create MAIL_FROM --data-file=- || true
 printf '%s' 'admin1@example.com,admin2@example.com' | gcloud secrets create ADMIN_EMAILS --data-file=- || true
 printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create ADMIN_SESSION_SECRET --data-file=- || true
@@ -208,6 +213,7 @@ gcloud builds submit --config cloudbuild.yaml \
 ### 7. Troubleshooting checklist
 
 - If build fails with `Dockerfile: no such file`: trigger is still using old config or commit lacks `Dockerfile`.
+- If build fails with `if 'build.service_account' is specified...`: add `options.logging: CLOUD_LOGGING_ONLY` (or a logs bucket/default logs bucket behavior) to `cloudbuild.yaml`.
 - If deploy succeeds but app fails startup:
   - check Cloud Run logs:
     `gcloud run services logs read neighborvote --region us-east4 --limit 200`
