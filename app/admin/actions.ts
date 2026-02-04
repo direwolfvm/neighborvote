@@ -240,7 +240,7 @@ export async function updateElectionAction(formData: FormData) {
     }
 
     name = parsed.data.name;
-    description = parsed.data.description;
+    description = parsed.data.description ?? null;
     ballotVersion = parsed.data.ballotVersion;
     status = parsed.data.status;
     effectiveOpensAt = opensAt;
@@ -249,7 +249,7 @@ export async function updateElectionAction(formData: FormData) {
     if (!["open", "closed"].includes(parsed.data.status)) {
       redirect(`/admin/elections/${parsed.data.electionId}?error=election_locked`);
     }
-    description = parsed.data.description;
+    description = parsed.data.description ?? null;
     status = parsed.data.status;
   } else if (existing.status === "closed") {
     if (!["open", "closed"].includes(parsed.data.status)) {
