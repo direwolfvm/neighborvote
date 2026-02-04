@@ -127,6 +127,21 @@ export const votes = pgTable(
   (table) => [unique("votes_election_member_unique").on(table.electionId, table.memberId)]
 );
 
+export const manualVoteCounts = pgTable(
+  "manual_vote_counts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    electionId: uuid("election_id")
+      .notNull()
+      .references(() => elections.id, { onDelete: "cascade" }),
+    choiceId: varchar("choice_id", { length: 100 }).notNull(),
+    count: integer("count").notNull().default(0),
+    updatedBy: varchar("updated_by", { length: 320 }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [unique("manual_vote_counts_election_choice_unique").on(table.electionId, table.choiceId)]
+);
+
 export const auditEvents = pgTable("audit_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   electionId: uuid("election_id").references(() => elections.id, {
@@ -179,6 +194,60 @@ export const adminLoginTokens = pgTable(
   (table) => [
     unique("admin_login_tokens_token_hash_unique").on(table.tokenHash),
     index("admin_login_tokens_email_idx").on(table.email)
+  ]
+);
+
+export const memberLoginTokens = pgTable(
+  "member_login_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    unique("member_login_tokens_token_hash_unique").on(table.tokenHash),
+    index("member_login_tokens_member_idx").on(table.memberId)
+  ]
+);
+
+export const memberLoginTokens = pgTable(
+  "member_login_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    unique("member_login_tokens_token_hash_unique").on(table.tokenHash),
+    index("member_login_tokens_member_idx").on(table.memberId)
+  ]
+);
+
+export const memberLoginTokens = pgTable(
+  "member_login_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    unique("member_login_tokens_token_hash_unique").on(table.tokenHash),
+    index("member_login_tokens_member_idx").on(table.memberId)
   ]
 );
 

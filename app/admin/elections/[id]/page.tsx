@@ -1,13 +1,14 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { adminLogoutAction } from "@/app/admin/login/actions";
 import { SubmitButton } from "@/components/submit-button";
 import { db } from "@/db/client";
-import { electionEligibility, elections, exportsTable, members } from "@/db/schema";
+import { electionEligibility, elections, exportsTable, manualVoteCounts, members, votes } from "@/db/schema";
 import { assertAdminAccess } from "@/lib/admin";
 import { ballotSchema } from "@/lib/ballot";
 import { createSignedExportDownloadUrl } from "@/lib/results-export";
 import {
   exportElectionResultsAction,
+  setManualVoteCountsAction,
   setEligibilityAction,
   updateElectionAction
 } from "@/app/admin/actions";
@@ -56,9 +57,15 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
     );
   }
 
+  const canEditBallot = election.status === "draft" || election.status === "scheduled";
+  const canEditDescription = canEditBallot || election.status === "open";
+  const canEditEligibility = election.status !== "closed" && election.status !== "archived";
+  const canViewResults = election.status === "open" || election.status === "closed";
+
   const paramsQuery = await searchParams;
   const saved = paramsQuery.saved === "1";
   const eligibilitySaved = paramsQuery.eligibility_saved === "1";
+  const manualSaved = paramsQuery.manual_saved === "1";
   const exported = paramsQuery.exported === "1";
   const error = typeof paramsQuery.error === "string" ? paramsQuery.error : null;
 
@@ -76,6 +83,68 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
     .orderBy(desc(electionEligibility.includedAt));
 
   const ballotPreview = ballotSchema.safeParse(election.ballotJson);
+
+  const voteCountRows = canViewResults
+    ? await db
+        .select({
+          choiceId: sql<string>`(votes.vote_payload_json->>'choiceId')`,
+          count: sql<number>`count(*)`
+        })
+        .from(votes)
+        .where(eq(votes.electionId, election.id))
+        .groupBy(sql`(votes.vote_payload_json->>'choiceId')`)
+    : [];
+
+  const manualCountRows = canViewResults
+    ? await db
+        .select({
+          choiceId: manualVoteCounts.choiceId,
+          count: manualVoteCounts.count,
+          updatedAt: manualVoteCounts.updatedAt,
+          updatedBy: manualVoteCounts.updatedBy
+        })
+        .from(manualVoteCounts)
+        .where(eq(manualVoteCounts.electionId, election.id))
+    : [];
+
+  const [{ count: voteTotalRaw }] = canViewResults
+    ? await db
+        .select({
+          count: sql<number>`count(*)`
+        })
+        .from(votes)
+        .where(eq(votes.electionId, election.id))
+    : [{ count: 0 }];
+
+  const [{ count: verifiedRaw }] = canViewResults
+    ? await db
+        .select({
+          count: sql<number>`count(*)`
+        })
+        .from(members)
+        .where(eq(members.status, "verified"))
+    : [{ count: 0 }];
+
+  const [{ count: ineligibleRaw }] = canViewResults
+    ? await db
+        .select({
+          count: sql<number>`count(*)`
+        })
+        .from(electionEligibility)
+        .where(and(eq(electionEligibility.electionId, election.id), eq(electionEligibility.eligible, false)))
+    : [{ count: 0 }];
+
+  const voteTotal = Number(voteTotalRaw ?? 0);
+  const verifiedCount = Number(verifiedRaw ?? 0);
+  const ineligibleCount = Number(ineligibleRaw ?? 0);
+  const eligibleCount = Math.max(0, verifiedCount - ineligibleCount);
+
+  const manualCountsByChoice = new Map(
+    manualCountRows.map((row) => [row.choiceId, Number(row.count ?? 0)])
+  );
+  const recordedCountsByChoice = new Map(
+    voteCountRows.map((row) => [row.choiceId, Number(row.count ?? 0)])
+  );
   const exportRows = await db
     .select({
       id: exportsTable.id,
@@ -110,6 +179,37 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         .slice(0, 16)
     : "";
 
+  const statusOptions =
+    election.status === "draft" || election.status === "scheduled"
+      ? ["draft", "scheduled", "open", "closed", "archived"]
+      : election.status === "open" || election.status === "closed"
+        ? ["open", "closed"]
+        : ["archived"];
+
+  const percentFormatter = new Intl.NumberFormat("en-US", {
+    style: "percent",
+    maximumFractionDigits: 1
+  });
+
+  const totalCombined =
+    canViewResults && ballotPreview.success
+      ? ballotPreview.data.choices.reduce((sum, choice) => {
+          const recorded = recordedCountsByChoice.get(choice.id) ?? 0;
+          const manual = manualCountsByChoice.get(choice.id) ?? 0;
+          return sum + recorded + manual;
+        }, 0)
+      : 0;
+
+  const latestManualUpdate =
+    manualCountRows.length > 0
+      ? manualCountRows.reduce<Date | null>((latest, row) => {
+          if (!latest || row.updatedAt > latest) {
+            return row.updatedAt;
+          }
+          return latest;
+        }, null)
+      : null;
+
   return (
     <section className="space-y-4">
       <div className="card space-y-2">
@@ -138,6 +238,10 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Eligibility updated.</p>
       ) : null}
 
+      {manualSaved ? (
+        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Manual counts updated.</p>
+      ) : null}
+
       {exported ? (
         <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Results export completed.</p>
       ) : null}
@@ -151,6 +255,8 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           {error === "election_not_found" ? "Election not found." : null}
           {error === "export_failed" ? "Export failed. Check Cloud Storage configuration." : null}
           {error === "notification_failed" ? "Vote notification emails could not be sent." : null}
+          {error === "election_locked" ? "This election is locked and cannot be edited in its current state." : null}
+          {error === "invalid_manual_counts" ? "Manual counts must be whole numbers zero or greater." : null}
           {![
             "invalid_ballot_json",
             "invalid_schedule",
@@ -158,7 +264,9 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
             "invalid_update_input",
             "election_not_found",
             "export_failed",
-            "notification_failed"
+            "notification_failed",
+            "election_locked",
+            "invalid_manual_counts"
           ].includes(error)
             ? "Update failed."
             : null}
@@ -171,36 +279,66 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           <input type="hidden" name="electionId" value={election.id} />
           <label className="block text-sm">
             Name
-            <input className="field" name="name" defaultValue={election.name} required />
+            <input
+              className="field"
+              name="name"
+              defaultValue={election.name}
+              required
+              readOnly={!canEditBallot}
+            />
           </label>
           <label className="block text-sm">
             Description
-            <textarea className="field" name="description" rows={3} defaultValue={election.description ?? ""} />
+            <textarea
+              className="field"
+              name="description"
+              rows={3}
+              defaultValue={election.description ?? ""}
+              readOnly={!canEditDescription}
+            />
           </label>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="block text-sm">
               Status
               <select className="field" name="status" defaultValue={election.status}>
-                <option value="draft">draft</option>
-                <option value="scheduled">scheduled</option>
-                <option value="open">open</option>
-                <option value="closed">closed</option>
-                <option value="archived">archived</option>
+                {statusOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="block text-sm">
               Ballot version
-              <input className="field" name="ballotVersion" defaultValue={election.ballotVersion} required />
+              <input
+                className="field"
+                name="ballotVersion"
+                defaultValue={election.ballotVersion}
+                required
+                readOnly={!canEditBallot}
+              />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="block text-sm">
               Opens at
-              <input className="field" type="datetime-local" name="opensAt" defaultValue={opensValue} />
+              <input
+                className="field"
+                type="datetime-local"
+                name="opensAt"
+                defaultValue={opensValue}
+                readOnly={!canEditBallot}
+              />
             </label>
             <label className="block text-sm">
               Closes at
-              <input className="field" type="datetime-local" name="closesAt" defaultValue={closesValue} />
+              <input
+                className="field"
+                type="datetime-local"
+                name="closesAt"
+                defaultValue={closesValue}
+                readOnly={!canEditBallot}
+              />
             </label>
           </div>
           <label className="block text-sm">
@@ -211,29 +349,37 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
               rows={10}
               defaultValue={JSON.stringify(election.ballotJson, null, 2)}
               required
+              readOnly={!canEditBallot}
             />
           </label>
+          {!canEditBallot ? (
+            <p className="text-xs text-slate-600">Ballot fields are locked once an election opens.</p>
+          ) : null}
           <SubmitButton idleText="Save election" pendingText="Saving..." />
         </form>
       </div>
 
       <div className="card space-y-3">
         <h2 className="text-lg font-semibold">Eligibility</h2>
-        <form action={setEligibilityAction} className="space-y-3">
-          <input type="hidden" name="electionId" value={election.id} />
-          <label className="block text-sm">
-            Member email
-            <input className="field" type="email" name="memberEmail" required />
-          </label>
-          <label className="block text-sm">
-            Eligible
-            <select className="field" name="eligible" defaultValue="true">
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          </label>
-          <SubmitButton idleText="Set eligibility" pendingText="Saving..." />
-        </form>
+        {canEditEligibility ? (
+          <form action={setEligibilityAction} className="space-y-3">
+            <input type="hidden" name="electionId" value={election.id} />
+            <label className="block text-sm">
+              Member email
+              <input className="field" type="email" name="memberEmail" required />
+            </label>
+            <label className="block text-sm">
+              Eligible
+              <select className="field" name="eligible" defaultValue="true">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </label>
+            <SubmitButton idleText="Set eligibility" pendingText="Saving..." />
+          </form>
+        ) : (
+          <p className="text-sm text-slate-600">Eligibility is locked once the election closes.</p>
+        )}
 
         <div>
           <h3 className="text-sm font-medium">Current eligibility list</h3>
@@ -268,6 +414,91 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           </div>
         )}
       </div>
+
+      {canViewResults ? (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">Results</h2>
+          {!ballotPreview.success ? (
+            <p className="text-sm text-rose-700">Results unavailable because the ballot is invalid.</p>
+          ) : (
+            <>
+              <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700">
+                <p className="font-medium">Turnout</p>
+                {eligibleCount > 0 ? (
+                  <p>
+                    {voteTotal} of {eligibleCount} eligible voters (
+                    {percentFormatter.format(voteTotal / eligibleCount)})
+                  </p>
+                ) : (
+                  <p>{voteTotal} votes recorded. Eligibility count not available.</p>
+                )}
+              </div>
+              <div className="space-y-3">
+                {ballotPreview.data.choices.map((choice) => {
+                  const recorded = recordedCountsByChoice.get(choice.id) ?? 0;
+                  const manual = manualCountsByChoice.get(choice.id) ?? 0;
+                  const total = recorded + manual;
+                  const percent = totalCombined > 0 ? total / totalCombined : 0;
+
+                  return (
+                    <div key={choice.id} className="rounded-md bg-slate-50 p-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium">{choice.label}</p>
+                        <p className="text-sm text-slate-700">
+                          {total} votes ({percentFormatter.format(percent)})
+                        </p>
+                      </div>
+                      <div className="mt-2 h-2 rounded bg-slate-200">
+                        <div
+                          className="h-2 rounded bg-emerald-500"
+                          style={{ width: `${totalCombined > 0 ? (total / totalCombined) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-slate-600">
+                        Recorded: {recorded} · Manual: {manual}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {canViewResults ? (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">Manual Vote Counts</h2>
+          {!ballotPreview.success ? (
+            <p className="text-sm text-rose-700">Manual counts unavailable because the ballot is invalid.</p>
+          ) : (
+            <>
+              <p className="text-sm text-slate-700">
+                Manual counts are added to recorded votes for reporting totals.
+              </p>
+              {latestManualUpdate ? (
+                <p className="text-xs text-slate-600">Last updated {latestManualUpdate.toISOString()}.</p>
+              ) : null}
+              <form action={setManualVoteCountsAction} className="space-y-3">
+                <input type="hidden" name="electionId" value={election.id} />
+                {ballotPreview.data.choices.map((choice) => (
+                  <label key={choice.id} className="block text-sm">
+                    {choice.label}
+                    <input
+                      className="field"
+                      type="number"
+                      min="0"
+                      name={`manualCount:${choice.id}`}
+                      defaultValue={manualCountsByChoice.get(choice.id) ?? 0}
+                    />
+                  </label>
+                ))}
+                <SubmitButton idleText="Save manual counts" pendingText="Saving..." />
+              </form>
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div className="card space-y-3">
         <h2 className="text-lg font-semibold">Exports</h2>

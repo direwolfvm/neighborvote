@@ -4,7 +4,9 @@ import { db } from "@/db/client";
 import { elections } from "@/db/schema";
 import { ballotSchema } from "@/lib/ballot";
 import { isElectionOpen } from "@/lib/election";
-import { castVoteAction, requestVoteLinkAction } from "@/app/elections/[id]/actions";
+import Link from "next/link";
+import { castVoteAction } from "@/app/elections/[id]/actions";
+import { getMemberFromSession } from "@/lib/member-auth";
 
 interface ElectionPageProps {
   params: Promise<{ id: string }>;
@@ -14,6 +16,8 @@ interface ElectionPageProps {
 export default async function ElectionPage({ params, searchParams }: ElectionPageProps) {
   const { id } = await params;
   const query = await searchParams;
+
+  const member = await getMemberFromSession();
 
   const [election] = await db
     .select({
@@ -87,21 +91,32 @@ export default async function ElectionPage({ params, searchParams }: ElectionPag
         </p>
       ) : null}
 
-      <div className="card space-y-3">
-        <h2 className="text-lg font-semibold">Request Voting Link</h2>
-        <form action={requestVoteLinkAction} className="space-y-3">
-          <input type="hidden" name="electionId" value={election.id} />
-          <label className="block text-sm">
-            Email
-            <input className="field" type="email" name="email" required />
-          </label>
-          <SubmitButton idleText="Email me a voting link" pendingText="Sending..." />
-        </form>
-      </div>
+      {member ? (
+        <div className="card">
+          <p className="text-sm text-slate-700">
+            Logged in as {member.email}. Voting links are requested from the member portal.
+          </p>
+          <Link className="btn-secondary mt-3 inline-flex" href="/member">
+            Back to member portal
+          </Link>
+        </div>
+      ) : (
+        <div className="card">
+          <p className="text-sm text-slate-700">
+            Please request a voting link from the member portal.
+          </p>
+          <Link className="btn-secondary mt-3 inline-flex" href="/member/login">
+            Member login
+          </Link>
+        </div>
+      )}
 
       {open && token && ballot.success ? (
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">Cast Vote</h2>
+          <Link className="text-sm text-slate-700 underline" href="/member">
+            Back to member portal
+          </Link>
           <form action={castVoteAction} className="space-y-3">
             <input type="hidden" name="electionId" value={election.id} />
             <input type="hidden" name="token" value={token} />

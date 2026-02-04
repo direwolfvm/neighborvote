@@ -58,6 +58,13 @@ export default async function RegisterPage({
           />
         </form>
       </details>
+
+      <p className="text-sm text-slate-700">
+        Already verified?{" "}
+        <a className="underline" href="/member/login">
+          Member login
+        </a>
+      </p>
     </section>
   );
 }

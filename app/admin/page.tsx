@@ -28,7 +28,13 @@ export default async function AdminPage({
   const error = typeof params.error === "string" ? params.error : null;
 
   const electionRows = await db
-    .select({ id: elections.id, name: elections.name, status: elections.status })
+    .select({
+      id: elections.id,
+      name: elections.name,
+      status: elections.status,
+      opensAt: elections.opensAt,
+      closesAt: elections.closesAt
+    })
     .from(elections)
     .orderBy(desc(elections.createdAt));
 
@@ -74,6 +80,54 @@ export default async function AdminPage({
       ) : null}
 
       <div className="card space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Elections</h2>
+          <Link className="btn" href="#create-election">
+            Create election
+          </Link>
+        </div>
+        {electionRows.length === 0 ? (
+          <p className="text-sm text-slate-700">No elections yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="py-2 pr-3">Election</th>
+                  <th className="py-2 pr-3">Status</th>
+                  <th className="py-2 pr-3">Opens</th>
+                  <th className="py-2 pr-3">Closes</th>
+                  <th className="py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {electionRows.map((row) => (
+                  <tr key={row.id} className="align-top">
+                    <td className="py-2 pr-3">
+                      <p className="font-medium text-slate-900">{row.name}</p>
+                      <p className="text-xs text-slate-500">{row.id}</p>
+                    </td>
+                    <td className="py-2 pr-3 text-slate-600">{row.status}</td>
+                    <td className="py-2 pr-3 text-slate-600">
+                      {row.opensAt ? row.opensAt.toISOString() : "—"}
+                    </td>
+                    <td className="py-2 pr-3 text-slate-600">
+                      {row.closesAt ? row.closesAt.toISOString() : "—"}
+                    </td>
+                    <td className="py-2">
+                      <Link className="text-slate-900 underline" href={`/admin/elections/${row.id}`}>
+                        {row.status === "draft" ? "Edit" : "Manage"}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card space-y-3" id="create-election">
         <h2 className="text-lg font-semibold">Create Election</h2>
         <form action={createElectionAction} className="space-y-3">
           <label className="block text-sm">
@@ -132,21 +186,6 @@ export default async function AdminPage({
           </label>
           <SubmitButton idleText="Import CSV" pendingText="Importing..." />
         </form>
-      </div>
-
-      <div className="card space-y-2">
-        <h2 className="text-lg font-semibold">Elections</h2>
-        {electionRows.length === 0 ? <p className="text-sm text-slate-700">No elections yet.</p> : null}
-        <ul className="space-y-1 text-sm">
-          {electionRows.map((row) => (
-            <li key={row.id}>
-              <Link className="text-slate-900 underline" href={`/admin/elections/${row.id}`}>
-                {row.name}
-              </Link>{" "}
-              <span className="text-slate-500">({row.status})</span>
-            </li>
-          ))}
-        </ul>
       </div>
     </section>
   );

@@ -34,7 +34,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-3">
         <article className="card space-y-4">
           <h2 className="text-xl font-semibold">Member registration</h2>
           <p className="text-sm text-slate-700">
@@ -43,6 +43,17 @@ export default function HomePage() {
           </p>
           <Link href="/register" className="btn w-full justify-center">
             Register as Member
+          </Link>
+        </article>
+
+        <article className="card space-y-4">
+          <h2 className="text-xl font-semibold">Member portal</h2>
+          <p className="text-sm text-slate-700">
+            Already verified? Sign in to see elections, request links, and review
+            submitted votes.
+          </p>
+          <Link href="/member/login" className="btn w-full justify-center">
+            Member Login
           </Link>
         </article>
 

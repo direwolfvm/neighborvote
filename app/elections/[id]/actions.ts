@@ -23,13 +23,15 @@ import { appBaseUrl } from "@/lib/urls";
 
 const requestLinkSchema = z.object({
   electionId: z.string().uuid(),
-  email: z.string().email().max(320)
+  email: z.string().email().max(320),
+  returnTo: z.string().optional()
 });
 
 export async function requestVoteLinkAction(formData: FormData) {
   const parsed = requestLinkSchema.safeParse({
     electionId: formData.get("electionId"),
-    email: formData.get("email")
+    email: formData.get("email"),
+    returnTo: formData.get("returnTo") || undefined
   });
 
   if (!parsed.success) {
@@ -38,6 +40,7 @@ export async function requestVoteLinkAction(formData: FormData) {
 
   const electionId = parsed.data.electionId;
   const email = normalizeEmail(parsed.data.email);
+  const returnTo = parsed.data.returnTo?.startsWith("/") ? parsed.data.returnTo : `/elections/${electionId}`;
 
   const [election] = await db
     .select({
@@ -52,7 +55,7 @@ export async function requestVoteLinkAction(formData: FormData) {
     .limit(1);
 
   if (!election || !isElectionOpen(election)) {
-    redirect(`/elections/${electionId}?error=election_not_open`);
+    redirect(`${returnTo}?error=election_not_open`);
   }
 
   const [member] = await db
@@ -62,7 +65,7 @@ export async function requestVoteLinkAction(formData: FormData) {
     .limit(1);
 
   if (!member || member.status !== "verified") {
-    redirect(`/elections/${electionId}?sent=1`);
+    redirect(`${returnTo}?sent=1`);
   }
 
   const [ineligibility] = await db
@@ -78,7 +81,7 @@ export async function requestVoteLinkAction(formData: FormData) {
     .limit(1);
 
   if (ineligibility) {
-    redirect(`/elections/${electionId}?sent=1`);
+    redirect(`${returnTo}?sent=1`);
   }
 
   const token = generateOpaqueToken();
@@ -119,7 +122,7 @@ export async function requestVoteLinkAction(formData: FormData) {
     }
   });
 
-  redirect(`/elections/${electionId}?sent=1`);
+  redirect(`${returnTo}?sent=1`);
 }
 
 const castVoteSchema = z.object({

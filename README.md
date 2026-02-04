@@ -64,6 +64,7 @@ npm run dev
 - `APP_BASE_URL`: base URL used in email links
 - `ADMIN_EMAILS`: comma-separated admin allowlist (case-insensitive)
 - `ADMIN_SESSION_SECRET`: at least 32 characters; signs admin session cookies
+- `MEMBER_SESSION_SECRET`: at least 32 characters; signs member session cookies
 - `MAIL_PROVIDER`: `mailgun` (or `sendgrid`)
 - `MAIL_FROM`: sender email
 - `MAILGUN_API_KEY`: Mailgun API key
@@ -81,6 +82,8 @@ npm run dev
 - `/admin` election creation + bulk member import
 - `/admin/elections/[id]` election settings + eligibility management
 - `/admin/login` admin magic-link login
+- `/member` member portal
+- `/member/login` member magic-link login
 - `/api/jobs/election-open-notifications` scheduled job endpoint for open-election notifications
 
 Admin routes now require a cookie session issued via one-time admin magic link and checked by middleware against `ADMIN_EMAILS`.
@@ -116,6 +119,7 @@ Current tests cover:
 - election notification trigger rules
 - export bundle CSV/manifest/hash helpers
 - admin session token signing/verification
+- member session token signing/verification
 - GCS path parsing helper
 - vote uniqueness constraint error handling helper
 
@@ -150,6 +154,7 @@ Create or update these Secret Manager secrets:
 - `MAIL_FROM`
 - `ADMIN_EMAILS`
 - `ADMIN_SESSION_SECRET`
+- `MEMBER_SESSION_SECRET`
 - `CRON_JOB_TOKEN`
 
 `DATABASE_URL` should use Cloud SQL unix socket format:
@@ -167,6 +172,7 @@ printf '%s' 'mg.example.com' | gcloud secrets create MAILGUN_DOMAIN --data-file=
 printf '%s' 'no-reply@your-domain.com' | gcloud secrets create MAIL_FROM --data-file=- || true
 printf '%s' 'admin1@example.com,admin2@example.com' | gcloud secrets create ADMIN_EMAILS --data-file=- || true
 printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create ADMIN_SESSION_SECRET --data-file=- || true
+printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create MEMBER_SESSION_SECRET --data-file=- || true
 printf '%s' '<random-cron-token>' | gcloud secrets create CRON_JOB_TOKEN --data-file=- || true
 ```
 
