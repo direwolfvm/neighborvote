@@ -1,6 +1,7 @@
 import {
   boolean,
   check,
+  integer,
   index,
   jsonb,
   pgEnum,
@@ -59,6 +60,8 @@ export const elections = pgTable("elections", {
   closesAt: timestamp("closes_at", { withTimezone: true }),
   ballotJson: jsonb("ballot_json").notNull(),
   ballotVersion: varchar("ballot_version", { length: 50 }).notNull(),
+  notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
+  notificationSentCount: integer("notification_sent_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
 });
 

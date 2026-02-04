@@ -40,7 +40,9 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
       opensAt: elections.opensAt,
       closesAt: elections.closesAt,
       ballotVersion: elections.ballotVersion,
-      ballotJson: elections.ballotJson
+      ballotJson: elections.ballotJson,
+      notificationSentAt: elections.notificationSentAt,
+      notificationSentCount: elections.notificationSentCount
     })
     .from(elections)
     .where(eq(elections.id, id))
@@ -115,6 +117,12 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         <p className="text-sm text-slate-700">
           <code>{election.id}</code>
         </p>
+        <p className="text-xs text-slate-600">
+          Notifications:{" "}
+          {election.notificationSentAt
+            ? `sent to ${election.notificationSentCount} members at ${election.notificationSentAt.toISOString()}`
+            : "not sent"}
+        </p>
         <form action={adminLogoutAction}>
           <button type="submit" className="btn-secondary">
             Log out
@@ -142,13 +150,15 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           {error === "invalid_update_input" ? "Election update input is invalid." : null}
           {error === "election_not_found" ? "Election not found." : null}
           {error === "export_failed" ? "Export failed. Check Cloud Storage configuration." : null}
+          {error === "notification_failed" ? "Vote notification emails could not be sent." : null}
           {![
             "invalid_ballot_json",
             "invalid_schedule",
             "member_not_found",
             "invalid_update_input",
             "election_not_found",
-            "export_failed"
+            "export_failed",
+            "notification_failed"
           ].includes(error)
             ? "Update failed."
             : null}

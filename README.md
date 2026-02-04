@@ -71,6 +71,7 @@ npm run dev
 - `MAILGUN_API_BASE_URL`: optional; defaults to `https://api.mailgun.net`
 - `SENDGRID_API_KEY`: optional, only if `MAIL_PROVIDER=sendgrid`
 - `GCS_EXPORT_BUCKET`: Cloud Storage bucket for export bundles (next phase)
+- `CRON_JOB_TOKEN`: token required by the scheduled notification endpoint
 
 ## Routes
 
@@ -80,6 +81,7 @@ npm run dev
 - `/admin` election creation + bulk member import
 - `/admin/elections/[id]` election settings + eligibility management
 - `/admin/login` admin magic-link login
+- `/api/jobs/election-open-notifications` scheduled job endpoint for open-election notifications
 
 Admin routes now require a cookie session issued via one-time admin magic link and checked by middleware against `ADMIN_EMAILS`.
 
@@ -111,6 +113,7 @@ Current tests cover:
 - import deconfliction by case-insensitive email
 - CSV import parsing
 - election open-window logic
+- election notification trigger rules
 - export bundle CSV/manifest/hash helpers
 - admin session token signing/verification
 - GCS path parsing helper
@@ -147,6 +150,7 @@ Create or update these Secret Manager secrets:
 - `MAIL_FROM`
 - `ADMIN_EMAILS`
 - `ADMIN_SESSION_SECRET`
+- `CRON_JOB_TOKEN`
 
 `DATABASE_URL` should use Cloud SQL unix socket format:
 
@@ -163,6 +167,7 @@ printf '%s' 'mg.example.com' | gcloud secrets create MAILGUN_DOMAIN --data-file=
 printf '%s' 'no-reply@your-domain.com' | gcloud secrets create MAIL_FROM --data-file=- || true
 printf '%s' 'admin1@example.com,admin2@example.com' | gcloud secrets create ADMIN_EMAILS --data-file=- || true
 printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create ADMIN_SESSION_SECRET --data-file=- || true
+printf '%s' '<random-cron-token>' | gcloud secrets create CRON_JOB_TOKEN --data-file=- || true
 ```
 
 To rotate/update an existing secret:
@@ -230,19 +235,28 @@ gcloud builds submit --config cloudbuild.yaml \
 1. Admin uploads CSV (`name,email`) on `/admin`.
 2. Emails are normalized and deconflicted case-insensitively.
 3. Members are upserted by email and audit events are written.
-4. Optionally, imported members are marked eligible for a selected election.
+4. Imported voters are eligible by default unless explicitly marked ineligible in election eligibility settings.
 
 ## Voting flow
 
 1. Voter enters email at `/elections/[id]`.
-2. If member is verified, eligible, and election is open, a one-time magic link is emailed.
+2. If member is verified, not explicitly marked ineligible for that election, and election is open, a one-time magic link is emailed.
 3. Link token is SHA256 hashed in `vote_sessions`.
 4. Voter submits a ballot choice from election ballot JSON.
 5. Vote is inserted into `votes`; duplicate voting is prevented by `unique(election_id, member_id)`.
 
-## Next implementation phases
+## Election opening notifications
 
-- Final hardening for production auth/session model for admin UI
+- Notifications are sent once per election and tracked in:
+  - `elections.notification_sent_at`
+  - `elections.notification_sent_count`
+- Notifications trigger when:
+  - election status is `open` and `opens_at` is `null` (immediate), or
+  - election status is `open` and `opens_at <= now`.
+- Admin election save attempts immediate dispatch for that election.
+- For scheduled openings, configure Cloud Scheduler to call:
+  - `POST /api/jobs/election-open-notifications`
+  - header `x-cron-token: <CRON_JOB_TOKEN>`
 
 ## Result exports
 

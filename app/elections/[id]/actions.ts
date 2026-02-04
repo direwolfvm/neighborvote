@@ -65,19 +65,19 @@ export async function requestVoteLinkAction(formData: FormData) {
     redirect(`/elections/${electionId}?sent=1`);
   }
 
-  const [eligibility] = await db
+  const [ineligibility] = await db
     .select({ memberId: electionEligibility.memberId })
     .from(electionEligibility)
     .where(
       and(
         eq(electionEligibility.electionId, electionId),
         eq(electionEligibility.memberId, member.id),
-        eq(electionEligibility.eligible, true)
+        eq(electionEligibility.eligible, false)
       )
     )
     .limit(1);
 
-  if (!eligibility) {
+  if (ineligibility) {
     redirect(`/elections/${electionId}?sent=1`);
   }
 
@@ -152,6 +152,7 @@ export async function castVoteAction(formData: FormData) {
           status: elections.status,
           opensAt: elections.opensAt,
           closesAt: elections.closesAt,
+          memberStatus: members.status,
           ballotVersion: elections.ballotVersion,
           ballotJson: elections.ballotJson,
           memberEmail: members.email
@@ -169,7 +170,7 @@ export async function castVoteAction(formData: FormData) {
         )
         .limit(1);
 
-      if (!session || !isElectionOpen(session)) {
+      if (!session || !isElectionOpen(session) || session.memberStatus !== "verified") {
         return { ok: false as const, reason: "invalid_or_expired" };
       }
 
@@ -179,19 +180,19 @@ export async function castVoteAction(formData: FormData) {
         return { ok: false as const, reason: "invalid_choice" };
       }
 
-      const [eligibility] = await tx
+      const [ineligibility] = await tx
         .select({ id: electionEligibility.id })
         .from(electionEligibility)
         .where(
           and(
             eq(electionEligibility.electionId, session.electionId),
             eq(electionEligibility.memberId, session.memberId),
-            eq(electionEligibility.eligible, true)
+            eq(electionEligibility.eligible, false)
           )
         )
         .limit(1);
 
-      if (!eligibility) {
+      if (ineligibility) {
         return { ok: false as const, reason: "not_eligible" };
       }
 

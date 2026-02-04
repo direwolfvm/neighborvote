@@ -10,6 +10,7 @@ import { parseBallotJson } from "@/lib/ballot";
 import { parseMemberCsv } from "@/lib/csv";
 import { normalizeEmail } from "@/lib/email";
 import { deconflictImportRows } from "@/lib/imports";
+import { dispatchOpenElectionNotifications } from "@/lib/notifications";
 import { createAndUploadResultsBundle } from "@/lib/results-export";
 
 const createElectionSchema = z.object({
@@ -73,13 +74,20 @@ export async function createElectionAction(formData: FormData) {
     }
   });
 
+  try {
+    await dispatchOpenElectionNotifications({
+      electionId: created.id,
+      actor
+    });
+  } catch {
+    redirect(`/admin/elections/${created.id}?error=notification_failed`);
+  }
+
   redirect(`/admin/elections/${created.id}?created=1`);
 }
 
 export async function bulkImportMembersAction(formData: FormData) {
   const actor = await getAdminActorEmail();
-  const electionIdValue = formData.get("electionId");
-  const electionId = typeof electionIdValue === "string" && electionIdValue ? electionIdValue : null;
 
   const file = formData.get("membersCsv");
   if (!(file instanceof File) || file.size === 0) {
@@ -103,16 +111,7 @@ export async function bulkImportMembersAction(formData: FormData) {
     redirect("/admin?error=empty_csv");
   }
 
-  const targetElection = electionId
-    ? await db.select({ id: elections.id }).from(elections).where(eq(elections.id, electionId)).limit(1)
-    : [];
-
-  if (electionId && targetElection.length === 0) {
-    redirect("/admin?error=election_not_found");
-  }
-
   let importedCount = 0;
-  let includedCount = 0;
 
   await db.transaction(async (tx) => {
     for (const row of rows) {
@@ -136,7 +135,7 @@ export async function bulkImportMembersAction(formData: FormData) {
       importedCount += 1;
 
       await tx.insert(auditEvents).values({
-        electionId,
+        electionId: null,
         actor,
         action: "member.imported",
         detailsJson: {
@@ -146,41 +145,20 @@ export async function bulkImportMembersAction(formData: FormData) {
           mergedCount: row.mergedCount
         }
       });
-
-      if (electionId) {
-        await tx
-          .insert(electionEligibility)
-          .values({
-            electionId,
-            memberId: member.id,
-            eligible: true,
-            includedBy: actor
-          })
-          .onConflictDoUpdate({
-            target: [electionEligibility.electionId, electionEligibility.memberId],
-            set: {
-              eligible: true,
-              includedBy: actor
-            }
-          });
-
-        includedCount += 1;
-      }
     }
 
     await tx.insert(auditEvents).values({
-      electionId,
+      electionId: null,
       actor,
       action: "members.bulk_import_completed",
       detailsJson: {
         importedCount,
-        includedCount,
         deconflictedRows: rows.length
       }
     });
   });
 
-  redirect(`/admin?imported=${importedCount}&included=${includedCount}`);
+  redirect(`/admin?imported=${importedCount}`);
 }
 
 const electionUpdateSchema = z.object({
@@ -248,6 +226,15 @@ export async function updateElectionAction(formData: FormData) {
       ballotVersion: parsed.data.ballotVersion
     }
   });
+
+  try {
+    await dispatchOpenElectionNotifications({
+      electionId: parsed.data.electionId,
+      actor
+    });
+  } catch {
+    redirect(`/admin/elections/${parsed.data.electionId}?error=notification_failed`);
+  }
 
   redirect(`/admin/elections/${parsed.data.electionId}?saved=1`);
 }

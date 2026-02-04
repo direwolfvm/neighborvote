@@ -25,7 +25,6 @@ export default async function AdminPage({
 
   const params = await searchParams;
   const imported = typeof params.imported === "string" ? params.imported : null;
-  const included = typeof params.included === "string" ? params.included : null;
   const error = typeof params.error === "string" ? params.error : null;
 
   const electionRows = await db
@@ -47,7 +46,7 @@ export default async function AdminPage({
 
       {imported ? (
         <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">
-          Import completed: {imported} members upserted, {included ?? "0"} added/updated in eligibility.
+          Import completed: {imported} members upserted. Imported members are eligible by default.
         </p>
       ) : null}
 
@@ -130,17 +129,6 @@ export default async function AdminPage({
           <label className="block text-sm">
             CSV file (`name,email`)
             <input className="field" type="file" name="membersCsv" accept=".csv,text/csv" required />
-          </label>
-          <label className="block text-sm">
-            Include imported members in election (optional)
-            <select className="field" name="electionId" defaultValue="">
-              <option value="">No election</option>
-              {electionRows.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.name} ({row.status})
-                </option>
-              ))}
-            </select>
           </label>
           <SubmitButton idleText="Import CSV" pendingText="Importing..." />
         </form>
