@@ -147,7 +147,7 @@ export default async function MemberHomePage() {
 
       <div className="card">
         <p className="text-sm text-slate-700">
-          Need help? <Link className="underline" href="/register">Register or verify</Link> if you haven't already.
+          Need help? <Link className="underline" href="/register">Register or verify</Link> if you haven&apos;t already.
         </p>
       </div>
     </section>
