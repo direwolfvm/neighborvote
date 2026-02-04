@@ -1,0 +1,356 @@
+"use server";
+
+import { asc, eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import { db } from "@/db/client";
+import { auditEvents, electionEligibility, elections, exportsTable, members, votes } from "@/db/schema";
+import { getAdminActorEmail } from "@/lib/admin";
+import { parseBallotJson } from "@/lib/ballot";
+import { parseMemberCsv } from "@/lib/csv";
+import { normalizeEmail } from "@/lib/email";
+import { deconflictImportRows } from "@/lib/imports";
+import { createAndUploadResultsBundle } from "@/lib/results-export";
+
+const createElectionSchema = z.object({
+  name: z.string().trim().min(2).max(200),
+  description: z.string().trim().max(10000).optional(),
+  ballotVersion: z.string().trim().min(1).max(50),
+  ballotJson: z.string().trim().min(2),
+  opensAt: z.string().trim().optional(),
+  closesAt: z.string().trim().optional()
+});
+
+export async function createElectionAction(formData: FormData) {
+  const actor = await getAdminActorEmail();
+
+  const parsed = createElectionSchema.safeParse({
+    name: formData.get("name"),
+    description: formData.get("description") || undefined,
+    ballotVersion: formData.get("ballotVersion"),
+    ballotJson: formData.get("ballotJson"),
+    opensAt: formData.get("opensAt") || undefined,
+    closesAt: formData.get("closesAt") || undefined
+  });
+
+  if (!parsed.success) {
+    redirect("/admin?error=invalid_election_input");
+  }
+
+  let ballot;
+  try {
+    ballot = parseBallotJson(parsed.data.ballotJson);
+  } catch {
+    redirect("/admin?error=invalid_ballot_json");
+  }
+
+  const opensAt = parsed.data.opensAt ? new Date(parsed.data.opensAt) : null;
+  const closesAt = parsed.data.closesAt ? new Date(parsed.data.closesAt) : null;
+
+  if ((opensAt && Number.isNaN(opensAt.getTime())) || (closesAt && Number.isNaN(closesAt.getTime()))) {
+    redirect("/admin?error=invalid_schedule");
+  }
+
+  const [created] = await db
+    .insert(elections)
+    .values({
+      name: parsed.data.name,
+      description: parsed.data.description,
+      ballotVersion: parsed.data.ballotVersion,
+      ballotJson: ballot,
+      status: "draft",
+      opensAt,
+      closesAt
+    })
+    .returning({ id: elections.id, name: elections.name });
+
+  await db.insert(auditEvents).values({
+    electionId: created.id,
+    actor,
+    action: "election.created",
+    detailsJson: {
+      electionName: created.name
+    }
+  });
+
+  redirect(`/admin/elections/${created.id}?created=1`);
+}
+
+export async function bulkImportMembersAction(formData: FormData) {
+  const actor = await getAdminActorEmail();
+  const electionIdValue = formData.get("electionId");
+  const electionId = typeof electionIdValue === "string" && electionIdValue ? electionIdValue : null;
+
+  const file = formData.get("membersCsv");
+  if (!(file instanceof File) || file.size === 0) {
+    redirect("/admin?error=missing_csv");
+  }
+
+  const csvText = await file.text();
+
+  let parsedRows;
+  try {
+    parsedRows = parseMemberCsv(csvText);
+  } catch {
+    redirect("/admin?error=invalid_csv");
+  }
+
+  const rows = deconflictImportRows(
+    parsedRows.map((row) => ({ fullName: row.fullName, email: row.email }))
+  );
+
+  if (rows.length === 0) {
+    redirect("/admin?error=empty_csv");
+  }
+
+  const targetElection = electionId
+    ? await db.select({ id: elections.id }).from(elections).where(eq(elections.id, electionId)).limit(1)
+    : [];
+
+  if (electionId && targetElection.length === 0) {
+    redirect("/admin?error=election_not_found");
+  }
+
+  let importedCount = 0;
+  let includedCount = 0;
+
+  await db.transaction(async (tx) => {
+    for (const row of rows) {
+      const email = normalizeEmail(row.email);
+
+      const [member] = await tx
+        .insert(members)
+        .values({
+          fullName: row.fullName,
+          email,
+          verificationMethod: "admin_import"
+        })
+        .onConflictDoUpdate({
+          target: members.email,
+          set: {
+            fullName: row.fullName
+          }
+        })
+        .returning({ id: members.id, email: members.email });
+
+      importedCount += 1;
+
+      await tx.insert(auditEvents).values({
+        electionId,
+        actor,
+        action: "member.imported",
+        detailsJson: {
+          memberId: member.id,
+          email: member.email,
+          source: "csv",
+          mergedCount: row.mergedCount
+        }
+      });
+
+      if (electionId) {
+        await tx
+          .insert(electionEligibility)
+          .values({
+            electionId,
+            memberId: member.id,
+            eligible: true,
+            includedBy: actor
+          })
+          .onConflictDoUpdate({
+            target: [electionEligibility.electionId, electionEligibility.memberId],
+            set: {
+              eligible: true,
+              includedBy: actor
+            }
+          });
+
+        includedCount += 1;
+      }
+    }
+
+    await tx.insert(auditEvents).values({
+      electionId,
+      actor,
+      action: "members.bulk_import_completed",
+      detailsJson: {
+        importedCount,
+        includedCount,
+        deconflictedRows: rows.length
+      }
+    });
+  });
+
+  redirect(`/admin?imported=${importedCount}&included=${includedCount}`);
+}
+
+const electionUpdateSchema = z.object({
+  electionId: z.string().uuid(),
+  status: z.enum(["draft", "scheduled", "open", "closed", "archived"]),
+  name: z.string().trim().min(2).max(200),
+  description: z.string().trim().max(10000).optional(),
+  ballotVersion: z.string().trim().min(1).max(50),
+  ballotJson: z.string().trim().min(2),
+  opensAt: z.string().trim().optional(),
+  closesAt: z.string().trim().optional()
+});
+
+export async function updateElectionAction(formData: FormData) {
+  const actor = await getAdminActorEmail();
+
+  const parsed = electionUpdateSchema.safeParse({
+    electionId: formData.get("electionId"),
+    status: formData.get("status"),
+    name: formData.get("name"),
+    description: formData.get("description") || undefined,
+    ballotVersion: formData.get("ballotVersion"),
+    ballotJson: formData.get("ballotJson"),
+    opensAt: formData.get("opensAt") || undefined,
+    closesAt: formData.get("closesAt") || undefined
+  });
+
+  if (!parsed.success) {
+    redirect(`/admin?error=invalid_update_input`);
+  }
+
+  let ballot;
+  try {
+    ballot = parseBallotJson(parsed.data.ballotJson);
+  } catch {
+    redirect(`/admin/elections/${parsed.data.electionId}?error=invalid_ballot_json`);
+  }
+
+  const opensAt = parsed.data.opensAt ? new Date(parsed.data.opensAt) : null;
+  const closesAt = parsed.data.closesAt ? new Date(parsed.data.closesAt) : null;
+
+  if ((opensAt && Number.isNaN(opensAt.getTime())) || (closesAt && Number.isNaN(closesAt.getTime()))) {
+    redirect(`/admin/elections/${parsed.data.electionId}?error=invalid_schedule`);
+  }
+
+  await db
+    .update(elections)
+    .set({
+      name: parsed.data.name,
+      description: parsed.data.description,
+      status: parsed.data.status,
+      ballotVersion: parsed.data.ballotVersion,
+      ballotJson: ballot,
+      opensAt,
+      closesAt
+    })
+    .where(eq(elections.id, parsed.data.electionId));
+
+  await db.insert(auditEvents).values({
+    electionId: parsed.data.electionId,
+    actor,
+    action: "election.updated",
+    detailsJson: {
+      status: parsed.data.status,
+      ballotVersion: parsed.data.ballotVersion
+    }
+  });
+
+  redirect(`/admin/elections/${parsed.data.electionId}?saved=1`);
+}
+
+export async function setEligibilityAction(formData: FormData) {
+  const actor = await getAdminActorEmail();
+
+  const electionId = z.string().uuid().parse(formData.get("electionId"));
+  const memberEmail = normalizeEmail(z.string().email().parse(formData.get("memberEmail")));
+  const eligible = z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .parse(formData.get("eligible"));
+
+  const [member] = await db.select({ id: members.id }).from(members).where(eq(members.email, memberEmail)).limit(1);
+  if (!member) {
+    redirect(`/admin/elections/${electionId}?error=member_not_found`);
+  }
+
+  await db
+    .insert(electionEligibility)
+    .values({
+      electionId,
+      memberId: member.id,
+      eligible,
+      includedBy: actor
+    })
+    .onConflictDoUpdate({
+      target: [electionEligibility.electionId, electionEligibility.memberId],
+      set: {
+        eligible,
+        includedBy: actor
+      }
+    });
+
+  await db.insert(auditEvents).values({
+    electionId,
+    actor,
+    action: "election.eligibility_set",
+    detailsJson: {
+      memberId: member.id,
+      eligible
+    }
+  });
+
+  redirect(`/admin/elections/${electionId}?eligibility_saved=1`);
+}
+
+export async function exportElectionResultsAction(formData: FormData) {
+  const actor = await getAdminActorEmail();
+  const electionId = z.string().uuid().parse(formData.get("electionId"));
+
+  const [election] = await db
+    .select({ id: elections.id, name: elections.name })
+    .from(elections)
+    .where(eq(elections.id, electionId))
+    .limit(1);
+
+  if (!election) {
+    redirect(`/admin/elections/${electionId}?error=election_not_found`);
+  }
+
+  const rows = await db
+    .select({
+      memberId: members.id,
+      fullName: members.fullName,
+      email: members.email,
+      ballotVersion: votes.ballotVersion,
+      votePayloadJson: votes.votePayloadJson,
+      castAt: votes.castAt
+    })
+    .from(votes)
+    .innerJoin(members, eq(votes.memberId, members.id))
+    .where(eq(votes.electionId, electionId))
+    .orderBy(asc(votes.castAt));
+
+  let exportBundle: Awaited<ReturnType<typeof createAndUploadResultsBundle>>;
+  try {
+    exportBundle = await createAndUploadResultsBundle({
+      electionId,
+      electionName: election.name,
+      rows
+    });
+  } catch {
+    redirect(`/admin/elections/${electionId}?error=export_failed`);
+  }
+
+  await db.insert(exportsTable).values({
+    electionId,
+    gcsPath: exportBundle.gcsPath,
+    sha256: exportBundle.bundleSha256
+  });
+
+  await db.insert(auditEvents).values({
+    electionId,
+    actor,
+    action: "election.results_exported",
+    detailsJson: {
+      gcsPath: exportBundle.gcsPath,
+      sha256: exportBundle.bundleSha256,
+      voteCount: rows.length
+    }
+  });
+
+  redirect(`/admin/elections/${electionId}?exported=1`);
+}
