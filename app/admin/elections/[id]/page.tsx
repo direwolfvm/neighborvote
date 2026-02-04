@@ -1,9 +1,11 @@
 import { desc, eq } from "drizzle-orm";
+import { adminLogoutAction } from "@/app/admin/login/actions";
 import { SubmitButton } from "@/components/submit-button";
 import { db } from "@/db/client";
 import { electionEligibility, elections, exportsTable, members } from "@/db/schema";
 import { assertAdminAccess } from "@/lib/admin";
 import { ballotSchema } from "@/lib/ballot";
+import { createSignedExportDownloadUrl } from "@/lib/results-export";
 import {
   exportElectionResultsAction,
   setEligibilityAction,
@@ -83,6 +85,17 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
     .where(eq(exportsTable.electionId, election.id))
     .orderBy(desc(exportsTable.createdAt));
 
+  const exportRowsWithLinks = await Promise.all(
+    exportRows.map(async (row) => {
+      try {
+        const downloadUrl = await createSignedExportDownloadUrl(row.gcsPath);
+        return { ...row, downloadUrl };
+      } catch {
+        return { ...row, downloadUrl: null };
+      }
+    })
+  );
+
   const opensValue = election.opensAt
     ? new Date(election.opensAt.getTime() - election.opensAt.getTimezoneOffset() * 60 * 1000)
         .toISOString()
@@ -102,6 +115,11 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         <p className="text-sm text-slate-700">
           <code>{election.id}</code>
         </p>
+        <form action={adminLogoutAction}>
+          <button type="submit" className="btn-secondary">
+            Log out
+          </button>
+        </form>
       </div>
 
       {saved ? (
@@ -247,15 +265,24 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           <input type="hidden" name="electionId" value={election.id} />
           <SubmitButton idleText="Export results bundle" pendingText="Exporting..." />
         </form>
-        {exportRows.length === 0 ? (
+        {exportRowsWithLinks.length === 0 ? (
           <p className="text-sm text-slate-600">No exports generated yet.</p>
         ) : (
           <ul className="space-y-2 text-sm">
-            {exportRows.map((row) => (
+            {exportRowsWithLinks.map((row) => (
               <li key={row.id} className="rounded-md bg-slate-50 p-2 ring-1 ring-slate-200">
                 <p className="font-mono text-xs">{row.gcsPath}</p>
                 <p className="text-xs text-slate-600">SHA256: {row.sha256}</p>
                 <p className="text-xs text-slate-600">{row.createdAt.toISOString()}</p>
+                {row.downloadUrl ? (
+                  <p className="pt-1">
+                    <a className="text-xs text-slate-900 underline" href={row.downloadUrl}>
+                      Download (signed URL)
+                    </a>
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500">Signed URL unavailable.</p>
+                )}
               </li>
             ))}
           </ul>

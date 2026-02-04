@@ -63,6 +63,7 @@ npm run dev
 - `DATABASE_URL`: Postgres connection string
 - `APP_BASE_URL`: base URL used in email links
 - `ADMIN_EMAILS`: comma-separated admin allowlist (case-insensitive)
+- `ADMIN_SESSION_SECRET`: at least 32 characters; signs admin session cookies
 - `MAIL_PROVIDER`: currently `sendgrid`
 - `MAIL_FROM`: sender email
 - `SENDGRID_API_KEY`: SendGrid API key
@@ -75,8 +76,9 @@ npm run dev
 - `/elections/[id]` voter election page scaffold
 - `/admin` election creation + bulk member import
 - `/admin/elections/[id]` election settings + eligibility management
+- `/admin/login` admin magic-link login
 
-Admin scaffolding currently checks `x-admin-email` request header against `ADMIN_EMAILS`.
+Admin routes now require a cookie session issued via one-time admin magic link and checked by middleware against `ADMIN_EMAILS`.
 
 ## Registration + verification flow
 
@@ -107,6 +109,8 @@ Current tests cover:
 - CSV import parsing
 - election open-window logic
 - export bundle CSV/manifest/hash helpers
+- admin session token signing/verification
+- GCS path parsing helper
 - vote uniqueness constraint error handling helper
 
 ## Cloud Run notes
@@ -146,3 +150,4 @@ On `/admin/elections/[id]`, admins can trigger export generation:
 6. Store bundle path and bundle SHA256 in `exports`.
 
 Cloud Run service account needs write access to the export bucket (for example, `roles/storage.objectAdmin` scoped to that bucket).
+Signed download URLs are generated in admin UI for existing exports.

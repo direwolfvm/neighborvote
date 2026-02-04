@@ -163,5 +163,21 @@ export const memberVerificationSessions = pgTable(
   ]
 );
 
+export const adminLoginTokens = pgTable(
+  "admin_login_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: varchar("email", { length: 320 }).notNull(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    unique("admin_login_tokens_token_hash_unique").on(table.tokenHash),
+    index("admin_login_tokens_email_idx").on(table.email)
+  ]
+);
+
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;

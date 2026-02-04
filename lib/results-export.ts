@@ -104,6 +104,29 @@ export async function uploadExportBundle(bundle: Buffer, objectName: string): Pr
   return `gs://${bucketName}/${objectName}`;
 }
 
+export function parseGcsPath(gcsPath: string): { bucket: string; objectName: string } {
+  const match = /^gs:\/\/([^/]+)\/(.+)$/.exec(gcsPath);
+  if (!match) {
+    throw new Error(`Invalid gcs path: ${gcsPath}`);
+  }
+
+  return {
+    bucket: match[1],
+    objectName: match[2]
+  };
+}
+
+export async function createSignedExportDownloadUrl(gcsPath: string, expiresInMinutes = 15): Promise<string> {
+  const { bucket, objectName } = parseGcsPath(gcsPath);
+  const storage = new Storage();
+  const [url] = await storage.bucket(bucket).file(objectName).getSignedUrl({
+    version: "v4",
+    action: "read",
+    expires: Date.now() + expiresInMinutes * 60 * 1000
+  });
+  return url;
+}
+
 export async function createAndUploadResultsBundle(params: {
   electionId: string;
   electionName: string;

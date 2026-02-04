@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { desc } from "drizzle-orm";
 import { SubmitButton } from "@/components/submit-button";
+import { adminLogoutAction } from "@/app/admin/login/actions";
 import { db } from "@/db/client";
 import { elections } from "@/db/schema";
 import { assertAdminAccess } from "@/lib/admin";
@@ -37,6 +38,11 @@ export default async function AdminPage({
       <div className="card space-y-2">
         <h1 className="text-2xl font-semibold">Admin</h1>
         <p className="text-sm text-slate-700">Create elections and import members.</p>
+        <form action={adminLogoutAction}>
+          <button type="submit" className="btn-secondary">
+            Log out
+          </button>
+        </form>
       </div>
 
       {imported ? (
