@@ -113,12 +113,111 @@ Current tests cover:
 - GCS path parsing helper
 - vote uniqueness constraint error handling helper
 
-## Cloud Run notes
+## Cloud Run deployment (GitHub push to `main`)
 
-- Build with `npm run build` and run with `npm run start`.
-- Inject secrets via Cloud Run environment variables backed by Secret Manager.
-- Use Cloud SQL connector/instance connection as appropriate and set `DATABASE_URL`.
-- Set `APP_BASE_URL` to the deployed HTTPS URL so emailed links resolve correctly.
+This repo includes:
+- `Dockerfile` for Next.js standalone runtime
+- `cloudbuild.yaml` for build + deploy
+- optional startup migration execution (`RUN_DB_MIGRATIONS`, default `0` in Cloud Build deploy step)
+
+### 1. Required project values
+
+- Project: `permitting-ai-helper`
+- Region: `us-east4`
+- Cloud SQL instance: `permitting-ai-helper:us-east4:metabase-sql`
+- Database name: `neighborvote`
+- Cloud Run service: `neighborvote`
+
+### 2. Enable required APIs
+
+```bash
+gcloud config set project permitting-ai-helper
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com
+```
+
+### 3. Create required secrets
+
+Create or update these Secret Manager secrets:
+- `DATABASE_URL`
+- `SENDGRID_API_KEY`
+- `MAIL_FROM`
+- `ADMIN_EMAILS`
+- `ADMIN_SESSION_SECRET`
+
+`DATABASE_URL` should use Cloud SQL unix socket format:
+
+```text
+postgres://<DB_USER>:<DB_PASSWORD>@/neighborvote?host=/cloudsql/permitting-ai-helper:us-east4:metabase-sql
+```
+
+Example secret creation:
+
+```bash
+printf '%s' 'postgres://<DB_USER>:<DB_PASSWORD>@/neighborvote?host=/cloudsql/permitting-ai-helper:us-east4:metabase-sql' | gcloud secrets create DATABASE_URL --data-file=- || true
+printf '%s' '<sendgrid-api-key>' | gcloud secrets create SENDGRID_API_KEY --data-file=- || true
+printf '%s' 'no-reply@your-domain.com' | gcloud secrets create MAIL_FROM --data-file=- || true
+printf '%s' 'admin1@example.com,admin2@example.com' | gcloud secrets create ADMIN_EMAILS --data-file=- || true
+printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create ADMIN_SESSION_SECRET --data-file=- || true
+```
+
+To rotate/update an existing secret:
+
+```bash
+printf '%s' '<new-value>' | gcloud secrets versions add SECRET_NAME --data-file=-
+```
+
+### 4. Ensure Cloud Run runtime service account access
+
+Current runtime service account:
+- `650621702399-compute@developer.gserviceaccount.com`
+
+Grant at least:
+- `roles/cloudsql.client`
+- `roles/secretmanager.secretAccessor`
+- `roles/storage.objectAdmin` (or narrower bucket-scoped write/read for exports)
+
+### 5. Replace trigger to use `cloudbuild.yaml`
+
+Existing trigger (`856a26dd-2781-4174-8ecc-0ce8ef2221e9`) currently uses inline build steps and bypasses `cloudbuild.yaml`.
+
+Delete old trigger:
+
+```bash
+gcloud builds triggers delete 856a26dd-2781-4174-8ecc-0ce8ef2221e9 --quiet
+```
+
+Create new GitHub trigger (push to `main`) using repo config:
+
+```bash
+gcloud builds triggers create github \
+  --name=neighborvote-main \
+  --repo-owner=direwolfvm \
+  --repo-name=neighborvote \
+  --branch-pattern='^main$' \
+  --build-config=cloudbuild.yaml \
+  --substitutions=_SERVICE=neighborvote,_REGION=us-east4,_AR_REPO=cloud-run-source-deploy,_CLOUDSQL_INSTANCE=permitting-ai-helper:us-east4:metabase-sql,_SERVICE_ACCOUNT=650621702399-compute@developer.gserviceaccount.com,_APP_BASE_URL=https://neighborvote-wiz2ttea4a-uk.a.run.app,_GCS_EXPORT_BUCKET=<your-export-bucket>
+```
+
+### 6. Run a manual build once (for verification)
+
+```bash
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=_SERVICE=neighborvote,_REGION=us-east4,_AR_REPO=cloud-run-source-deploy,_CLOUDSQL_INSTANCE=permitting-ai-helper:us-east4:metabase-sql,_SERVICE_ACCOUNT=650621702399-compute@developer.gserviceaccount.com,_APP_BASE_URL=https://neighborvote-wiz2ttea4a-uk.a.run.app,_GCS_EXPORT_BUCKET=<your-export-bucket>
+```
+
+### 7. Troubleshooting checklist
+
+- If build fails with `Dockerfile: no such file`: trigger is still using old config or commit lacks `Dockerfile`.
+- If deploy succeeds but app fails startup:
+  - check Cloud Run logs:
+    `gcloud run services logs read neighborvote --region us-east4 --limit 200`
+  - verify `DATABASE_URL` secret format and Cloud SQL instance annotation.
+- If DB connection fails:
+  - ensure runtime service account has `roles/cloudsql.client`.
+- If secret access fails:
+  - ensure runtime service account has `roles/secretmanager.secretAccessor`.
+- If exports fail:
+  - ensure `GCS_EXPORT_BUCKET` exists and runtime service account has storage permissions.
 
 ## Bulk import flow
 
