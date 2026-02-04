@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { SubmitButton } from "@/components/submit-button";
 import { db } from "@/db/client";
 import { electionEligibility, elections, voteSessions, votes } from "@/db/schema";
@@ -45,7 +45,7 @@ export default async function MemberHomePage() {
     .where(
       and(
         sql`${elections.status} <> 'draft'`,
-        isNull(electionEligibility.id).or(eq(electionEligibility.eligible, true))
+        or(isNull(electionEligibility.id), eq(electionEligibility.eligible, true))
       )
     )
     .orderBy(desc(elections.opensAt));
