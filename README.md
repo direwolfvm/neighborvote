@@ -65,12 +65,10 @@ npm run dev
 - `ADMIN_EMAILS`: comma-separated admin allowlist (case-insensitive)
 - `ADMIN_SESSION_SECRET`: at least 32 characters; signs admin session cookies
 - `MEMBER_SESSION_SECRET`: at least 32 characters; signs member session cookies
-- `MAIL_PROVIDER`: `postal` (default), `mailgun`, or `sendgrid`
+- `MAIL_PROVIDER`: `mailgun` (default) or `sendgrid`
 - `MAIL_FROM`: sender email
-- `POSTAL_API_KEY`: Postal server API key (required if `MAIL_PROVIDER=postal`)
-- `POSTAL_API_URL`: Postal server base URL, e.g. `https://postal.neighborvote.online` (required if `MAIL_PROVIDER=postal`)
-- `MAILGUN_API_KEY`: Mailgun API key (only if `MAIL_PROVIDER=mailgun`)
-- `MAILGUN_DOMAIN`: Mailgun domain (only if `MAIL_PROVIDER=mailgun`)
+- `MAILGUN_API_KEY`: Mailgun API key
+- `MAILGUN_DOMAIN`: Mailgun sending domain (e.g. `neighborvote.online`)
 - `MAILGUN_API_BASE_URL`: optional; defaults to `https://api.mailgun.net`
 - `SENDGRID_API_KEY`: optional, only if `MAIL_PROVIDER=sendgrid`
 - `GCS_EXPORT_BUCKET`: Cloud Storage bucket for export bundles (next phase)
@@ -151,8 +149,8 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 
 Create or update these Secret Manager secrets:
 - `DATABASE_URL`
-- `POSTAL_API_KEY`
-- `POSTAL_API_URL`
+- `MAILGUN_API_KEY`
+- `MAILGUN_DOMAIN`
 - `MAIL_FROM`
 - `ADMIN_EMAILS`
 - `ADMIN_SESSION_SECRET`
@@ -169,8 +167,8 @@ Example secret creation:
 
 ```bash
 printf '%s' 'postgres://<DB_USER>:<DB_PASSWORD>@/neighborvote?host=/cloudsql/permitting-ai-helper:us-east4:metabase-sql' | gcloud secrets create DATABASE_URL --data-file=- || true
-printf '%s' '<postal-server-api-key>' | gcloud secrets create POSTAL_API_KEY --data-file=- || true
-printf '%s' 'https://postal.neighborvote.online' | gcloud secrets create POSTAL_API_URL --data-file=- || true
+printf '%s' '<mailgun-api-key>' | gcloud secrets create MAILGUN_API_KEY --data-file=- || true
+printf '%s' 'neighborvote.online' | gcloud secrets create MAILGUN_DOMAIN --data-file=- || true
 printf '%s' 'no-reply@your-domain.com' | gcloud secrets create MAIL_FROM --data-file=- || true
 printf '%s' 'admin1@example.com,admin2@example.com' | gcloud secrets create ADMIN_EMAILS --data-file=- || true
 printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create ADMIN_SESSION_SECRET --data-file=- || true
