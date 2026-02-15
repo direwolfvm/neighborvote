@@ -75,8 +75,40 @@ async function sendWithMailgun(params: SendEmailParams) {
   }
 }
 
+async function sendWithPostal(params: SendEmailParams) {
+  const apiKey = requiredEnv("POSTAL_API_KEY");
+  const apiBase = requiredEnv("POSTAL_API_URL");
+  const from = requiredEnv("MAIL_FROM");
+
+  const payload: Record<string, unknown> = {
+    to: [params.to],
+    from,
+    subject: params.subject,
+    plain_body: params.text
+  };
+
+  if (params.html) {
+    payload.html_body = params.html;
+  }
+
+  const response = await fetch(`${apiBase}/api/v1/send/message`, {
+    method: "POST",
+    headers: {
+      "X-Server-API-Key": apiKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const responseBody = await response.text();
+    throw new Error(`Postal error: ${response.status} ${responseBody}`);
+  }
+}
+
 export async function sendEmail(params: SendEmailParams): Promise<void> {
-  const provider = (process.env.MAIL_PROVIDER ?? "mailgun").toLowerCase();
+  const provider = (process.env.MAIL_PROVIDER ?? "postal").toLowerCase();
+  if (provider === "postal") return sendWithPostal(params);
   if (provider === "mailgun") return sendWithMailgun(params);
   if (provider === "sendgrid") return sendWithSendGrid(params);
 
