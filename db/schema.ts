@@ -33,6 +33,8 @@ export const verificationMethodEnum = pgEnum("verification_method", [
   "admin_import"
 ]);
 
+export const staffRoleEnum = pgEnum("staff_role", ["admin", "election_manager"]);
+
 export const members = pgTable(
   "members",
   {
@@ -194,6 +196,21 @@ export const adminLoginTokens = pgTable(
   (table) => [
     unique("admin_login_tokens_token_hash_unique").on(table.tokenHash),
     index("admin_login_tokens_email_idx").on(table.email)
+  ]
+);
+
+export const staffRoles = pgTable(
+  "staff_roles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: varchar("email", { length: 320 }).notNull(),
+    role: staffRoleEnum("role").notNull(),
+    addedBy: varchar("added_by", { length: 320 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    unique("staff_roles_email_unique").on(table.email),
+    check("staff_roles_email_lowercase", sql`${table.email} = lower(${table.email})`)
   ]
 );
 

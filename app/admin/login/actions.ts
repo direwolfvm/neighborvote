@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/db/client";
-import { adminLoginTokens, auditEvents } from "@/db/schema";
+import { adminLoginTokens, auditEvents, staffRoles } from "@/db/schema";
 import { ADMIN_SESSION_COOKIE, createAdminSessionToken } from "@/lib/admin-session";
 import { generateOpaqueToken, sha256Hex } from "@/lib/crypto";
 import { normalizeEmail, parseAdminEmails } from "@/lib/email";
@@ -28,10 +28,15 @@ export async function requestAdminLoginAction(formData: FormData) {
   }
 
   const email = normalizeEmail(parsed.data.email);
-  const allowed = parseAdminEmails(process.env.ADMIN_EMAILS);
   const nextPath = parsed.data.next && parsed.data.next.startsWith("/") ? parsed.data.next : "/admin";
+  const allowed = parseAdminEmails(process.env.ADMIN_EMAILS);
+  const [staffRole] = await db
+    .select({ role: staffRoles.role })
+    .from(staffRoles)
+    .where(eq(staffRoles.email, email))
+    .limit(1);
 
-  if (!allowed.has(email)) {
+  if (!staffRole && !allowed.has(email)) {
     redirect(`/admin/login?sent=1&next=${encodeURIComponent(nextPath)}`);
   }
 

@@ -11,9 +11,10 @@ import {
   exportsTable,
   manualVoteCounts,
   members,
+  staffRoles,
   votes
 } from "@/db/schema";
-import { getAdminActorEmail } from "@/lib/admin";
+import { assertAdminRoleAccess, getAdminActorEmail } from "@/lib/admin";
 import { parseBallotJson } from "@/lib/ballot";
 import { parseMemberCsv } from "@/lib/csv";
 import { normalizeEmail } from "@/lib/email";
@@ -167,6 +168,54 @@ export async function bulkImportMembersAction(formData: FormData) {
   });
 
   redirect(`/admin?imported=${importedCount}`);
+}
+
+const staffRoleSchema = z.object({
+  email: z.string().email().max(320),
+  role: z.enum(["admin", "election_manager"])
+});
+
+export async function upsertStaffRoleAction(formData: FormData) {
+  await assertAdminRoleAccess();
+  const actor = await getAdminActorEmail();
+
+  const parsed = staffRoleSchema.safeParse({
+    email: formData.get("email"),
+    role: formData.get("role")
+  });
+
+  if (!parsed.success) {
+    redirect("/admin?error=invalid_staff_role_input");
+  }
+
+  const email = normalizeEmail(parsed.data.email);
+
+  await db
+    .insert(staffRoles)
+    .values({
+      email,
+      role: parsed.data.role,
+      addedBy: actor
+    })
+    .onConflictDoUpdate({
+      target: staffRoles.email,
+      set: {
+        role: parsed.data.role,
+        addedBy: actor
+      }
+    });
+
+  await db.insert(auditEvents).values({
+    electionId: null,
+    actor,
+    action: "staff_role.upserted",
+    detailsJson: {
+      email,
+      role: parsed.data.role
+    }
+  });
+
+  redirect("/admin?staff_role_saved=1");
 }
 
 const electionUpdateSchema = z.object({

@@ -3,9 +3,14 @@ import { desc } from "drizzle-orm";
 import { SubmitButton } from "@/components/submit-button";
 import { adminLogoutAction } from "@/app/admin/login/actions";
 import { db } from "@/db/client";
-import { elections } from "@/db/schema";
-import { assertAdminAccess } from "@/lib/admin";
-import { bulkImportMembersAction, createElectionAction } from "@/app/admin/actions";
+import { elections, staffRoles } from "@/db/schema";
+import { assertAdminAccess, getAdminActor } from "@/lib/admin";
+import { parseAdminEmails } from "@/lib/email";
+import {
+  bulkImportMembersAction,
+  createElectionAction,
+  upsertStaffRoleAction
+} from "@/app/admin/actions";
 
 export default async function AdminPage({
   searchParams
@@ -25,7 +30,9 @@ export default async function AdminPage({
 
   const params = await searchParams;
   const imported = typeof params.imported === "string" ? params.imported : null;
+  const staffRoleSaved = params.staff_role_saved === "1";
   const error = typeof params.error === "string" ? params.error : null;
+  const actor = await getAdminActor();
 
   const electionRows = await db
     .select({
@@ -37,6 +44,34 @@ export default async function AdminPage({
     })
     .from(elections)
     .orderBy(desc(elections.createdAt));
+
+  const dbRoleRows =
+    actor.role === "admin"
+      ? await db
+          .select({
+            email: staffRoles.email,
+            role: staffRoles.role,
+            addedBy: staffRoles.addedBy,
+            createdAt: staffRoles.createdAt
+          })
+          .from(staffRoles)
+          .orderBy(desc(staffRoles.createdAt))
+      : [];
+
+  const roleRows =
+    actor.role === "admin"
+      ? [
+          ...dbRoleRows,
+          ...Array.from(parseAdminEmails(process.env.ADMIN_EMAILS))
+            .filter((email) => !dbRoleRows.some((row) => row.email === email))
+            .map((email) => ({
+              email,
+              role: "admin" as const,
+              addedBy: "ADMIN_EMAILS",
+              createdAt: new Date(0)
+            }))
+        ]
+      : [];
 
   return (
     <section className="space-y-4">
@@ -56,6 +91,12 @@ export default async function AdminPage({
         </p>
       ) : null}
 
+      {staffRoleSaved ? (
+        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">
+          Staff role saved.
+        </p>
+      ) : null}
+
       {error ? (
         <p className="rounded-md bg-rose-50 p-3 text-sm text-rose-700">
           {error === "missing_csv" ? "Please upload a CSV file." : null}
@@ -65,6 +106,7 @@ export default async function AdminPage({
           {error === "invalid_ballot_json" ? "Ballot JSON is invalid." : null}
           {error === "invalid_schedule" ? "Invalid election schedule." : null}
           {error === "election_not_found" ? "Selected election not found." : null}
+          {error === "invalid_staff_role_input" ? "Invalid staff role input." : null}
           {![
             "missing_csv",
             "invalid_csv",
@@ -72,11 +114,61 @@ export default async function AdminPage({
             "invalid_election_input",
             "invalid_ballot_json",
             "invalid_schedule",
-            "election_not_found"
+            "election_not_found",
+            "invalid_staff_role_input"
           ].includes(error)
             ? "Action failed."
             : null}
         </p>
+      ) : null}
+
+      {actor.role === "admin" ? (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">Staff Roles</h2>
+          <p className="text-sm text-slate-700">
+            Admins and election managers can manage elections. Only admins can manage staff roles.
+          </p>
+          <form action={upsertStaffRoleAction} className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+            <label className="block text-sm">
+              Email
+              <input className="field" type="email" name="email" required />
+            </label>
+            <label className="block text-sm">
+              Role
+              <select className="field" name="role" defaultValue="election_manager">
+                <option value="election_manager">election_manager</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+            <SubmitButton idleText="Save role" pendingText="Saving..." />
+          </form>
+          {roleRows.length === 0 ? (
+            <p className="text-sm text-slate-600">No staff roles stored yet. `ADMIN_EMAILS` fallback still works.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="py-2 pr-3">Email</th>
+                    <th className="py-2 pr-3">Role</th>
+                    <th className="py-2 pr-3">Added By</th>
+                    <th className="py-2">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {roleRows.map((row) => (
+                    <tr key={row.email}>
+                      <td className="py-2 pr-3 text-slate-900">{row.email}</td>
+                      <td className="py-2 pr-3 text-slate-600">{row.role}</td>
+                      <td className="py-2 pr-3 text-slate-600">{row.addedBy}</td>
+                      <td className="py-2 text-slate-600">{row.createdAt.toISOString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       ) : null}
 
       <div className="card space-y-3">
