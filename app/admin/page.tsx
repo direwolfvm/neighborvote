@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { desc } from "drizzle-orm";
 import { SubmitButton } from "@/components/submit-button";
+import { AdminBallotEditor } from "@/components/admin-ballot-editor";
 import { adminLogoutAction } from "@/app/admin/login/actions";
 import { db } from "@/db/client";
 import { elections, staffRoles } from "@/db/schema";
@@ -236,12 +237,9 @@ export default async function AdminPage({
           </label>
           <label className="block text-sm">
             Ballot JSON
-            <textarea
-              className="field font-mono text-xs"
+            <AdminBallotEditor
               name="ballotJson"
-              rows={8}
-              required
-              defaultValue={JSON.stringify(
+              initialJson={JSON.stringify(
                 {
                   title: "Neighborhood Board Election",
                   choices: [

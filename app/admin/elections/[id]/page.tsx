@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { adminLogoutAction } from "@/app/admin/login/actions";
 import { SubmitButton } from "@/components/submit-button";
+import { AdminBallotEditor } from "@/components/admin-ballot-editor";
 import { db } from "@/db/client";
 import { electionEligibility, elections, exportsTable, manualVoteCounts, members, votes } from "@/db/schema";
 import { assertAdminAccess } from "@/lib/admin";
@@ -343,12 +344,9 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           </div>
           <label className="block text-sm">
             Ballot JSON
-            <textarea
-              className="field font-mono text-xs"
+            <AdminBallotEditor
               name="ballotJson"
-              rows={10}
-              defaultValue={JSON.stringify(election.ballotJson, null, 2)}
-              required
+              initialJson={JSON.stringify(election.ballotJson, null, 2)}
               readOnly={!canEditBallot}
             />
           </label>
