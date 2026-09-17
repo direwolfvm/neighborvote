@@ -1,6 +1,6 @@
 # Production readiness handoff
 
-NeighborVote is now a community-scoped, trust-based voting application with a polished member journey and Mailgun email. This handoff distinguishes completed application work from the remaining live release checks. No production data was migrated, no production service was deployed, and no email was delivered to a member during this work.
+NeighborVote is now a community-scoped, trust-based voting application with a polished member journey and Mailgun email. The production release was deployed on September 17, 2026 at https://neighborvote.online. Existing data was preserved through the community migration. No live test email was sent to a member.
 
 ## Assessment and changes
 
@@ -23,19 +23,33 @@ NeighborVote is now a community-scoped, trust-based voting application with a po
 - 63 unit tests cover templates/escaping, Mailgun request shape/privacy/transport errors, redirects, sessions, ballot validity, eligibility, polygon boundaries/holes, geocoder failures, export safety, and existing helpers.
 - 19 real PostgreSQL integration tests cover registration and one-time verification, scoped membership, inactive/excluded members, changing rules, duplicate concurrent voting, throttling, community authorization and staff revocation, scheduled-ballot locking, manual-count validation, and safe notification claims/retries.
 - Upgrade fixture: a populated legacy schema refuses the production upgrade without the explicit maintenance flag; the authorized upgrade preserves roster, staff, and recorded votes; rerunning is idempotent.
-- The Linux ARM64 container built and ran as UID 1000 using the cached Node 22 slim image (confirmed Debian 12/bookworm). Runtime preflight rejects missing settings, the database health endpoint returns 200, the cron endpoint returns 401 without credentials, and container migration rerun succeeds. The exact default AMD64 base-image fetch stalled in local Docker; validate that target in Cloud Build.
+- The Linux ARM64 container built and ran as UID 1000 using the cached Node 22 slim image (confirmed Debian 12/bookworm). Runtime preflight rejects missing settings, the database health endpoint returns 200, the cron endpoint returns 401 without credentials, and container migration rerun succeeds. The exact AMD64 Dockerfile subsequently built successfully in Cloud Build for the production release.
 - Lint, TypeScript, and Next.js production build passed. `npm audit` reports zero known vulnerabilities in the tested dependency graph.
 - Browser: community discovery → registration → Mailgun acceptance screen → email confirmation → member portal → ballot request → review → final receipt. Manager login, settings save, and resulting postal-code/attestation form also checked. Desktop/mobile screenshots are under ignored `output/playwright/`.
-- Mailgun account API confirmed `neighborvote.online` is active and all three returned sending DNS records are valid. The actual branded email was accepted in provider test mode; this verifies API acceptance, not inbox delivery. Credentials remain only in ignored local configuration.
+- Mailgun account API confirmed `neighborvote.online` is active and all three returned sending DNS records are valid. The actual branded email was accepted in provider test mode; this verifies API acceptance, not inbox delivery. Credentials are held in ignored local configuration and application-specific Secret Manager secrets.
 - A live Census API check resolved the Census headquarters example address. Boundary behavior, holes, invalid coordinates, ambiguous/unmatched results, and unavailable provider responses are covered by automated tests.
 
-## Live release steps
+## Production release record — September 17, 2026
 
-1. **Prepare the environment.** Configure the approved HTTPS origin, actual platform administrator email(s), unique random session/cron secrets, Mailgun sender/domain/key, Cloud SQL connection, and private GCS export bucket. Prefer a domain-scoped sending key over the locally supplied account key. Set `MAILGUN_TEST_MODE=false`; optional Reply-To must be a monitored inbox. The runtime preflight rejects missing/placeholder configuration and test-mode mail.
-2. **Plan the first maintenance release.** Back up production and verify restore access. Stop traffic/writes to the proof-of-concept revision. The first community migration is not compatible with writes from that old revision. Explicitly set `_ALLOW_COMMUNITY_MIGRATION=true` for the migration build only after that maintenance condition is met. The migration job runs before deployment and failure stops release. Do not roll the old image back onto the new schema; restore the backup if that rollback is required.
-3. **Configure community details.** Rename the default community, set a real contact inbox, add scoped staff, and choose the minimum trust-based rules needed. GIS screening is off by default. If used, test known inside/outside addresses against the actual GIS export before enabling it for residents.
-4. **Connect operations.** Point HTTPS traffic at the new revision. Schedule the authenticated notification endpoint every minute with an adequate timeout. Set uptime/error monitoring and database backups/PITR. Scope Cloud SQL, Secret Manager, and export/signing permissions to the runtime service account.
-5. **Run the live smoke check.** Use a designated test member and a test election to confirm real inbox delivery, email verification, ballot request, review/submission, duplicate prevention, manager access, notification status, and a private signed export download. This requires an authorized real test recipient; no unsolicited mail was sent as part of this task.
+- Application commit: `5698a7d` on `main`; GitHub Actions production checks passed, including all 82 tests, upgrade checks, dependency audit, and build.
+- Cloud Build: `3290026a-42e5-49ce-8be9-5b47f2ea3e8e` succeeded with the exact Node 22 bookworm Dockerfile on AMD64.
+- Image: `us-east4-docker.pkg.dev/permitting-ai-helper/cloud-run-source-deploy/neighborvote@sha256:ad0735424290cf332760ad717f7347976e7ce2e0dac0a56e788aea1b0990e0b3`.
+- Cloud Run: `neighborvote`, region `us-east4`, revision `neighborvote-release-5698a7d`, production origin `https://neighborvote.online`. The domain mapping and TLS certificate are healthy.
+- Maintenance: automatic deployment and the scheduler were paused, all public traffic was routed to a 503 maintenance revision, and the old revision’s 300-second request timeout was allowed to expire before the final backup and migration. The migration execution `neighborvote-migrate-dr5ck` succeeded. The one-time migration flag was reset to false afterward.
+- Preservation: checksums of the existing member, recorded vote, election, and three staff records matched before and after migration. The member has a membership in the default community.
+- Recovery: Cloud SQL backup `1789652139890` completed successfully. Daily instance backups are enabled at 07:00 UTC with seven retained backups. An application-only PostgreSQL archive was restored successfully into an isolated local database and upgraded before touching production. The final drained-state archive is stored privately at `gs://permitting-ai-helper-neighborvote-backups/releases/2026-09-17-5698a7d/pre-community-migration.dump`. Restore that application archive for a NeighborVote-only rollback; restoring the entire shared SQL instance would also affect other applications. Do not run the prototype image against the upgraded schema.
+- Runtime identity: `neighborvote-runtime@permitting-ai-helper.iam.gserviceaccount.com`, with Cloud SQL Client, access to the eight `NEIGHBORVOTE_` application secrets, bucket-scoped export access, and permission to sign as itself. The existing administrator accounts and session secrets were preserved. Export and backup buckets enforce public access prevention; the runtime has no grant on the backup bucket.
+- Mailgun: approved domain and branded sender configured with live sending enabled. The production credential authenticates and sending DNS records are valid. No real inbox-delivery claim is made.
+- Live smoke checks: homepage, community pages, registration, login pages, help, database health, cron authentication, and an actual private object write/signed download from the runtime identity passed. The temporary export object was removed. The authenticated notification check sent zero messages.
+- Scheduler: `neighborvote-election-open-notify`, every minute, 360-second deadline, authenticated with the existing cron token. Already-notified legacy elections retain their notification history.
+- Monitoring: HTTPS health uptime check `neighborvote-production-health-jBE3RG44KXg` and a Cloud Monitoring incident policy. External notification channels are not configured.
+- Future pushes: the existing GitHub main trigger uses `cloudbuild.yaml`, the dedicated runtime, production domain, application-specific secrets, and the normal migration gate. The deployment explicitly resets any maintenance command before serving the application.
+
+## Remaining operator setup
+
+1. Rename the default community, set a monitored contact inbox, and select the minimum eligibility rules needed. GIS screening remains off until actual boundaries and known inside/outside addresses are tested.
+2. With an authorized test recipient, verify real inbox delivery, email confirmation, voting, and manager access. Provider acceptance and successful application checks do not establish inbox placement.
+3. Choose external monitoring notification channels and a recovery-time objective. Daily backups are enabled; PITR remains disabled on the shared SQL instance and requires a separately planned configuration change.
 
 ## Operational boundaries
 
@@ -45,6 +59,6 @@ NeighborVote is now a community-scoped, trust-based voting application with a po
 - Email ledger `sent` means provider acceptance. Mailgun bounce/delivery webhooks and inbox placement monitoring are not implemented; inspect provider logs for deliverability and uncertain outcomes before retrying.
 - Current geocoding supports US addresses and has no service-level guarantee. Errors fail with a recovery message; managers can disable optional screening or correct their boundary.
 - The community roster screen shows up to 100 matching members, with search; CSV imports are limited to 2,000 rows / 500 KB. Notification workers process 20 recipients per invocation and five automatic attempts per definitively rejected recipient.
-- Production DNS, Cloud SQL backups, Cloud Scheduler, GCS signing permissions, and real inbox delivery must be verified in the actual deployment environment. Local checks do not establish their live state.
+- Production DNS, daily backups, scheduling, and GCS signing were verified during this deployment. Real inbox delivery and external alert delivery remain operator checks.
 
 See [README](../README.md) for setup, configuration, commands, and exact workflow behavior.

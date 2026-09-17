@@ -62,6 +62,8 @@ steps:
       - --region=${_REGION}
       - --platform=managed
       - --allow-unauthenticated
+      - --command=
+      - --args=
       - --port=8080
       - --max-instances=10
       - --concurrency=40
