@@ -1,30 +1,40 @@
-import { db } from "@/db/client";
-import { elections } from "@/db/schema";
-
+import { loadEnvConfig } from "@next/env";
+loadEnvConfig(process.cwd());
 async function main() {
-  const sampleBallot = {
-    title: "Neighborhood Board Election",
-    choices: [
-      { id: "candidate_a", label: "Candidate A" },
-      { id: "candidate_b", label: "Candidate B" },
-      { id: "abstain", label: "Abstain" }
-    ]
-  };
-
-  await db.insert(elections).values({
-    name: "Initial Sample Election",
-    description: "Seeded election for local testing",
-    status: "scheduled",
-    opensAt: new Date(Date.now() + 1000 * 60 * 60),
-    closesAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
-    ballotJson: sampleBallot,
-    ballotVersion: "v1"
-  });
-
-  console.log("Seed completed");
+  const { db, pool } = await import("@/db/client");
+  const { communities, elections } = await import("@/db/schema");
+  const { eq } = await import("drizzle-orm");
+  if (process.env.NODE_ENV === "production")
+    throw new Error("Sample data is for local development only");
+  const [community] = await db
+    .select()
+    .from(communities)
+    .where(eq(communities.slug, "neighborvote"))
+    .limit(1);
+  if (!community) throw new Error("Run migrations before seeding");
+  await db
+    .insert(elections)
+    .values({
+      id: "84d23800-dfb5-4ffb-902e-624182d88b66",
+      communityId: community.id,
+      name: "Our neighborhood priorities",
+      description: "A sample ballot for local testing. What should our community focus on next?",
+      status: "open",
+      ballotJson: {
+        title: "Which project should we prioritize?",
+        choices: [
+          { id: "trees", label: "More trees and green space" },
+          { id: "paths", label: "Safer walking routes" },
+          { id: "events", label: "More community events" }
+        ]
+      },
+      ballotVersion: "v1"
+    })
+    .onConflictDoNothing();
+  console.log("Sample election ready");
+  await pool.end();
 }
-
-main().catch((error) => {
-  console.error(error);
+main().catch(() => {
+  console.error("Seed failed. Check local database configuration.");
   process.exit(1);
 });

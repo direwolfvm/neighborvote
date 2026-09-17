@@ -1,11 +1,13 @@
 "use server";
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gt, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/db/client";
 import {
   auditEvents,
+  communityMemberships,
+  electionNotifications,
   electionEligibility,
   elections,
   exportsTable,
@@ -14,12 +16,16 @@ import {
   staffRoles,
   votes
 } from "@/db/schema";
-import { assertAdminRoleAccess, getAdminActorEmail } from "@/lib/admin";
+import { assertAdminRoleAccess, getAdminActorEmail, getElectionActor } from "@/lib/admin";
+import { isElectionOpen } from "@/lib/election";
 import { parseBallotJson } from "@/lib/ballot";
 import { parseMemberCsv } from "@/lib/csv";
 import { normalizeEmail } from "@/lib/email";
 import { deconflictImportRows } from "@/lib/imports";
-import { dispatchOpenElectionNotifications } from "@/lib/notifications";
+import {
+  dispatchOpenElectionNotifications,
+  queueOpenElectionNotifications
+} from "@/lib/notifications";
 import { createAndUploadResultsBundle } from "@/lib/results-export";
 
 const createElectionSchema = z.object({
@@ -32,7 +38,8 @@ const createElectionSchema = z.object({
 });
 
 export async function createElectionAction(formData: FormData) {
-  const actor = await getAdminActorEmail();
+  const communityId = z.uuid().parse(formData.get("communityId"));
+  const actor = await getAdminActorEmail(communityId);
 
   const parsed = createElectionSchema.safeParse({
     name: formData.get("name"),
@@ -54,16 +61,21 @@ export async function createElectionAction(formData: FormData) {
     redirect("/admin?error=invalid_ballot_json");
   }
 
-  const opensAt = parsed.data.opensAt ? new Date(parsed.data.opensAt) : null;
-  const closesAt = parsed.data.closesAt ? new Date(parsed.data.closesAt) : null;
+  const opensAt = parsed.data.opensAt ? new Date(`${parsed.data.opensAt}Z`) : null;
+  const closesAt = parsed.data.closesAt ? new Date(`${parsed.data.closesAt}Z`) : null;
 
-  if ((opensAt && Number.isNaN(opensAt.getTime())) || (closesAt && Number.isNaN(closesAt.getTime()))) {
+  if (
+    (opensAt && Number.isNaN(opensAt.getTime())) ||
+    (closesAt && Number.isNaN(closesAt.getTime())) ||
+    (opensAt && closesAt && closesAt <= opensAt)
+  ) {
     redirect("/admin?error=invalid_schedule");
   }
 
   const [created] = await db
     .insert(elections)
     .values({
+      communityId,
       name: parsed.data.name,
       description: parsed.data.description,
       ballotVersion: parsed.data.ballotVersion,
@@ -84,7 +96,7 @@ export async function createElectionAction(formData: FormData) {
   });
 
   try {
-    await dispatchOpenElectionNotifications({
+    await queueOpenElectionNotifications({
       electionId: created.id,
       actor
     });
@@ -96,10 +108,11 @@ export async function createElectionAction(formData: FormData) {
 }
 
 export async function bulkImportMembersAction(formData: FormData) {
-  const actor = await getAdminActorEmail();
+  const communityId = z.uuid().parse(formData.get("communityId"));
+  const actor = await getAdminActorEmail(communityId);
 
   const file = formData.get("membersCsv");
-  if (!(file instanceof File) || file.size === 0) {
+  if (!(file instanceof File) || file.size === 0 || file.size > 500_000) {
     redirect("/admin?error=missing_csv");
   }
 
@@ -112,6 +125,19 @@ export async function bulkImportMembersAction(formData: FormData) {
     redirect("/admin?error=invalid_csv");
   }
 
+  if (
+    parsedRows.length > 2000 ||
+    parsedRows.some(
+      (row) =>
+        !z
+          .object({
+            fullName: z.string().trim().min(2).max(200),
+            email: z.string().trim().email().max(320)
+          })
+          .safeParse(row).success
+    )
+  )
+    redirect("/admin?error=invalid_csv");
   const rows = deconflictImportRows(
     parsedRows.map((row) => ({ fullName: row.fullName, email: row.email }))
   );
@@ -136,11 +162,15 @@ export async function bulkImportMembersAction(formData: FormData) {
         .onConflictDoUpdate({
           target: members.email,
           set: {
-            fullName: row.fullName
+            email
           }
         })
         .returning({ id: members.id, email: members.email });
 
+      await tx
+        .insert(communityMemberships)
+        .values({ communityId, memberId: member.id })
+        .onConflictDoNothing();
       importedCount += 1;
 
       await tx.insert(auditEvents).values({
@@ -167,7 +197,7 @@ export async function bulkImportMembersAction(formData: FormData) {
     });
   });
 
-  redirect(`/admin?imported=${importedCount}`);
+  redirect(`/admin/communities/${communityId}?imported=${importedCount}`);
 }
 
 const staffRoleSchema = z.object({
@@ -176,8 +206,9 @@ const staffRoleSchema = z.object({
 });
 
 export async function upsertStaffRoleAction(formData: FormData) {
-  await assertAdminRoleAccess();
-  const actor = await getAdminActorEmail();
+  const communityId = z.uuid().parse(formData.get("communityId"));
+  await assertAdminRoleAccess(communityId);
+  const actor = await getAdminActorEmail(communityId);
 
   const parsed = staffRoleSchema.safeParse({
     email: formData.get("email"),
@@ -193,12 +224,13 @@ export async function upsertStaffRoleAction(formData: FormData) {
   await db
     .insert(staffRoles)
     .values({
+      communityId,
       email,
       role: parsed.data.role,
       addedBy: actor
     })
     .onConflictDoUpdate({
-      target: staffRoles.email,
+      target: [staffRoles.communityId, staffRoles.email],
       set: {
         role: parsed.data.role,
         addedBy: actor
@@ -215,7 +247,7 @@ export async function upsertStaffRoleAction(formData: FormData) {
     }
   });
 
-  redirect("/admin?staff_role_saved=1");
+  redirect(`/admin/communities/${communityId}?saved=1`);
 }
 
 const electionUpdateSchema = z.object({
@@ -230,7 +262,8 @@ const electionUpdateSchema = z.object({
 });
 
 export async function updateElectionAction(formData: FormData) {
-  const actor = await getAdminActorEmail();
+  const targetElectionId = z.uuid().parse(formData.get("electionId"));
+  const actor = (await getElectionActor(targetElectionId)).email;
 
   const parsed = electionUpdateSchema.safeParse({
     electionId: formData.get("electionId"),
@@ -274,11 +307,18 @@ export async function updateElectionAction(formData: FormData) {
   let effectiveOpensAt = existing.opensAt;
   let effectiveClosesAt = existing.closesAt;
 
-  if (existing.status === "draft" || existing.status === "scheduled") {
-    const opensAt = parsed.data.opensAt ? new Date(parsed.data.opensAt) : null;
-    const closesAt = parsed.data.closesAt ? new Date(parsed.data.closesAt) : null;
+  if (
+    existing.status === "draft" ||
+    (existing.status === "scheduled" && existing.opensAt !== null && existing.opensAt > new Date())
+  ) {
+    const opensAt = parsed.data.opensAt ? new Date(`${parsed.data.opensAt}Z`) : null;
+    const closesAt = parsed.data.closesAt ? new Date(`${parsed.data.closesAt}Z`) : null;
 
-    if ((opensAt && Number.isNaN(opensAt.getTime())) || (closesAt && Number.isNaN(closesAt.getTime()))) {
+    if (
+      (opensAt && Number.isNaN(opensAt.getTime())) ||
+      (closesAt && Number.isNaN(closesAt.getTime())) ||
+      (opensAt && closesAt && closesAt <= opensAt)
+    ) {
       redirect(`/admin/elections/${parsed.data.electionId}?error=invalid_schedule`);
     }
 
@@ -291,17 +331,19 @@ export async function updateElectionAction(formData: FormData) {
     name = parsed.data.name;
     description = parsed.data.description ?? null;
     ballotVersion = parsed.data.ballotVersion;
+    if (parsed.data.status === "scheduled" && !opensAt)
+      redirect(`/admin/elections/${parsed.data.electionId}?error=invalid_schedule`);
     status = parsed.data.status;
     effectiveOpensAt = opensAt;
     effectiveClosesAt = closesAt;
-  } else if (existing.status === "open") {
-    if (!["open", "closed"].includes(parsed.data.status)) {
+  } else if (existing.status === "open" || existing.status === "scheduled") {
+    if (!["open", "closed", "scheduled", "archived"].includes(parsed.data.status)) {
       redirect(`/admin/elections/${parsed.data.electionId}?error=election_locked`);
     }
     description = parsed.data.description ?? null;
     status = parsed.data.status;
   } else if (existing.status === "closed") {
-    if (!["open", "closed"].includes(parsed.data.status)) {
+    if (!["open", "closed", "archived"].includes(parsed.data.status)) {
       redirect(`/admin/elections/${parsed.data.electionId}?error=election_locked`);
     }
     status = parsed.data.status;
@@ -309,7 +351,7 @@ export async function updateElectionAction(formData: FormData) {
     redirect(`/admin/elections/${parsed.data.electionId}?error=election_locked`);
   }
 
-  await db
+  const updatedElection = await db
     .update(elections)
     .set({
       name,
@@ -320,7 +362,18 @@ export async function updateElectionAction(formData: FormData) {
       opensAt: effectiveOpensAt,
       closesAt: effectiveClosesAt
     })
-    .where(eq(elections.id, parsed.data.electionId));
+    .where(
+      and(
+        eq(elections.id, parsed.data.electionId),
+        eq(elections.status, existing.status),
+        existing.status === "scheduled" && existing.opensAt && existing.opensAt > new Date()
+          ? gt(elections.opensAt, new Date())
+          : undefined
+      )
+    )
+    .returning({ id: elections.id });
+  if (!updatedElection.length)
+    redirect(`/admin/elections/${parsed.data.electionId}?error=election_locked`);
 
   await db.insert(auditEvents).values({
     electionId: parsed.data.electionId,
@@ -333,7 +386,7 @@ export async function updateElectionAction(formData: FormData) {
   });
 
   try {
-    await dispatchOpenElectionNotifications({
+    await queueOpenElectionNotifications({
       electionId: parsed.data.electionId,
       actor
     });
@@ -345,7 +398,8 @@ export async function updateElectionAction(formData: FormData) {
 }
 
 export async function setEligibilityAction(formData: FormData) {
-  const actor = await getAdminActorEmail();
+  const targetElectionId = z.uuid().parse(formData.get("electionId"));
+  const actor = (await getElectionActor(targetElectionId)).email;
 
   const electionId = z.string().uuid().parse(formData.get("electionId"));
   const memberEmail = normalizeEmail(z.string().email().parse(formData.get("memberEmail")));
@@ -354,49 +408,68 @@ export async function setEligibilityAction(formData: FormData) {
     .transform((value) => value === "true")
     .parse(formData.get("eligible"));
 
-  const [election] = await db
-    .select({ id: elections.id, status: elections.status })
-    .from(elections)
-    .where(eq(elections.id, electionId))
-    .limit(1);
+  await db.transaction(async (tx) => {
+    const [election] = await tx
+      .select({ id: elections.id, status: elections.status, communityId: elections.communityId })
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1)
+      .for("update");
 
-  if (!election) {
-    redirect(`/admin/elections/${electionId}?error=election_not_found`);
-  }
+    if (!election) {
+      redirect(`/admin/elections/${electionId}?error=election_not_found`);
+    }
 
-  if (election.status === "closed" || election.status === "archived") {
-    redirect(`/admin/elections/${electionId}?error=election_locked`);
-  }
+    if (election.status === "closed" || election.status === "archived") {
+      redirect(`/admin/elections/${electionId}?error=election_locked`);
+    }
 
-  const [member] = await db.select({ id: members.id }).from(members).where(eq(members.email, memberEmail)).limit(1);
-  if (!member) {
-    redirect(`/admin/elections/${electionId}?error=member_not_found`);
-  }
+    const [member] = await tx
+      .select({ id: members.id })
+      .from(members)
+      .where(eq(members.email, memberEmail))
+      .limit(1);
+    if (!member) {
+      redirect(`/admin/elections/${electionId}?error=member_not_found`);
+    }
 
-  await db
-    .insert(electionEligibility)
-    .values({
-      electionId,
-      memberId: member.id,
-      eligible,
-      includedBy: actor
-    })
-    .onConflictDoUpdate({
-      target: [electionEligibility.electionId, electionEligibility.memberId],
-      set: {
+    const [membership] = await tx
+      .select({ id: communityMemberships.id })
+      .from(communityMemberships)
+      .where(
+        and(
+          eq(communityMemberships.communityId, election.communityId),
+          eq(communityMemberships.memberId, member.id)
+        )
+      )
+      .limit(1);
+    if (!membership) redirect(`/admin/elections/${electionId}?error=member_not_found`);
+
+    await tx
+      .insert(electionEligibility)
+      .values({
+        electionId,
+        memberId: member.id,
         eligible,
         includedBy: actor
+      })
+      .onConflictDoUpdate({
+        target: [electionEligibility.electionId, electionEligibility.memberId],
+        set: {
+          eligible,
+          includedBy: actor
+        }
+      });
+
+    await tx.insert(auditEvents).values({
+      electionId,
+      actor,
+      action: "election.eligibility_set",
+      detailsJson: {
+        memberId: member.id,
+        eligible
       }
     });
-
-  await db.insert(auditEvents).values({
-    electionId,
-    actor,
-    action: "election.eligibility_set",
-    detailsJson: {
-      memberId: member.id,
-      eligible
-    }
   });
 
   redirect(`/admin/elections/${electionId}?eligibility_saved=1`);
@@ -407,7 +480,8 @@ const manualCountsSchema = z.object({
 });
 
 export async function setManualVoteCountsAction(formData: FormData) {
-  const actor = await getAdminActorEmail();
+  const targetElectionId = z.uuid().parse(formData.get("electionId"));
+  const actor = (await getElectionActor(targetElectionId)).email;
 
   const parsed = manualCountsSchema.safeParse({
     electionId: formData.get("electionId")
@@ -421,6 +495,8 @@ export async function setManualVoteCountsAction(formData: FormData) {
     .select({
       id: elections.id,
       status: elections.status,
+      opensAt: elections.opensAt,
+      closesAt: elections.closesAt,
       ballotJson: elections.ballotJson
     })
     .from(elections)
@@ -431,7 +507,7 @@ export async function setManualVoteCountsAction(formData: FormData) {
     redirect(`/admin/elections/${parsed.data.electionId}?error=election_not_found`);
   }
 
-  if (election.status !== "open" && election.status !== "closed") {
+  if (!isElectionOpen(election) && election.status !== "closed") {
     redirect(`/admin/elections/${parsed.data.electionId}?error=election_locked`);
   }
 
@@ -451,7 +527,7 @@ export async function setManualVoteCountsAction(formData: FormData) {
       continue;
     }
     const parsedCount = Number(raw);
-    if (!Number.isInteger(parsedCount) || parsedCount < 0) {
+    if (!Number.isInteger(parsedCount) || parsedCount < 0 || parsedCount > 2147483647) {
       redirect(`/admin/elections/${parsed.data.electionId}?error=invalid_manual_counts`);
     }
     counts.push({ choiceId: choice.id, count: parsedCount });
@@ -493,11 +569,12 @@ export async function setManualVoteCountsAction(formData: FormData) {
 }
 
 export async function exportElectionResultsAction(formData: FormData) {
-  const actor = await getAdminActorEmail();
+  const targetElectionId = z.uuid().parse(formData.get("electionId"));
+  const actor = (await getElectionActor(targetElectionId)).email;
   const electionId = z.string().uuid().parse(formData.get("electionId"));
 
   const [election] = await db
-    .select({ id: elections.id, name: elections.name })
+    .select({ id: elections.id, name: elections.name, ballotJson: elections.ballotJson })
     .from(elections)
     .where(eq(elections.id, electionId))
     .limit(1);
@@ -520,11 +597,19 @@ export async function exportElectionResultsAction(formData: FormData) {
     .where(eq(votes.electionId, electionId))
     .orderBy(asc(votes.castAt));
 
+  const manualCounts = await db
+    .select({ choiceId: manualVoteCounts.choiceId, count: manualVoteCounts.count })
+    .from(manualVoteCounts)
+    .where(eq(manualVoteCounts.electionId, electionId));
+  const choices = parseBallotJson(JSON.stringify(election.ballotJson)).choices;
+
   let exportBundle: Awaited<ReturnType<typeof createAndUploadResultsBundle>>;
   try {
     exportBundle = await createAndUploadResultsBundle({
       electionId,
       electionName: election.name,
+      choices,
+      manualCounts,
       rows
     });
   } catch {
@@ -549,4 +634,36 @@ export async function exportElectionResultsAction(formData: FormData) {
   });
 
   redirect(`/admin/elections/${electionId}?exported=1`);
+}
+
+export async function retryElectionNotificationsAction(formData: FormData) {
+  const electionId = z.uuid().parse(formData.get("electionId"));
+  const actor = await getElectionActor(electionId);
+  const includeUncertain = formData.get("confirmedUnsent") === "on";
+  await db.transaction(async (tx) => {
+    await tx
+      .update(electionNotifications)
+      .set({ status: "pending", attempts: 0, nextAttemptAt: new Date(), lastError: null })
+      .where(
+        and(
+          eq(electionNotifications.electionId, electionId),
+          inArray(
+            electionNotifications.status,
+            includeUncertain ? ["failed", "uncertain"] : ["failed"]
+          )
+        )
+      );
+    await tx.insert(auditEvents).values({
+      electionId,
+      actor: actor.email,
+      action: "election.notification_retry_requested",
+      detailsJson: { includeUncertain }
+    });
+  });
+  try {
+    await dispatchOpenElectionNotifications({ electionId, actor: actor.email });
+  } catch {
+    redirect(`/admin/elections/${electionId}?error=notification_failed`);
+  }
+  redirect(`/admin/elections/${electionId}?saved=1`);
 }

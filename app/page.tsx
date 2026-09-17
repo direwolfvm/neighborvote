@@ -1,80 +1,85 @@
 import Link from "next/link";
-
 export default function HomePage() {
   return (
-    <section className="space-y-6">
-      <div className="relative overflow-hidden rounded-2xl bg-slate-900 p-8 text-slate-50 shadow-xl">
-        <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-cyan-400/20 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-16 -left-12 h-44 w-44 rounded-full bg-blue-400/20 blur-3xl" />
-        <div className="relative space-y-5">
-          <div className="inline-flex items-center gap-3 rounded-full bg-white/10 px-4 py-2 text-sm ring-1 ring-white/20">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-cyan-300/20 text-cyan-100 ring-1 ring-cyan-200/30">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="h-5 w-5"
-                aria-hidden="true"
-              >
-                <path d="M3.75 3a.75.75 0 0 0-.75.75v4.5c0 .414.336.75.75.75h7.5V3h-7.5ZM12.75 3v6h7.5a.75.75 0 0 0 .75-.75v-4.5a.75.75 0 0 0-.75-.75h-7.5ZM3 11.25v9a.75.75 0 0 0 .75.75h7.5v-9H3ZM12.75 12v9h7.5a.75.75 0 0 0 .75-.75v-9h-8.25Z" />
-              </svg>
-            </span>
-            <span className="font-medium">NeighborVote</span>
+    <section className="space-y-14 py-5 sm:py-10">
+      <div className="grid items-center gap-10 md:grid-cols-[1.3fr_1fr]">
+        <div className="space-y-6">
+          <p className="eyebrow">Small communities. Meaningful decisions.</p>
+          <h1 className="max-w-xl text-5xl font-semibold leading-[1.08] tracking-tight sm:text-6xl">
+            A stronger neighborhood
+            <br />
+            <span className="text-emerald-800">starts with you.</span>
+          </h1>
+          <p className="max-w-lg text-lg leading-relaxed text-slate-600">
+            A simple way to have a say in the place you call home. Join your community, see what’s
+            on the ballot, and make your voice count.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Link className="btn" href="/communities">
+              Find your community <span aria-hidden="true">↗</span>
+            </Link>
+            <Link className="btn-secondary" href="/member/login">
+              Sign in
+            </Link>
           </div>
-
-          <div className="space-y-3">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-              Trusted electronic voting for neighborhood associations
-            </h1>
-            <p className="max-w-2xl text-sm text-slate-200 sm:text-base">
-              Run elections with secure verification links, simple ballot access,
-              and role-based access for members and administrators.
-            </p>
-          </div>
+          <p className="text-sm text-slate-500">
+            No passwords. No paperwork. Just neighbors making decisions.
+          </p>
+        </div>
+        <div className="relative rounded-3xl bg-[#e2ece3] px-7 py-10 sm:px-10">
+          <svg viewBox="0 0 320 200" className="mx-auto mb-8 w-full max-w-sm" aria-hidden="true">
+            <path d="M25 180h270" stroke="#708b74" strokeWidth="2" />
+            <path d="M44 100l60-55 60 55v80H44z" fill="#f8faf5" stroke="#285a43" strokeWidth="3" />
+            <path
+              d="M172 111l46-45 46 45v69h-92z"
+              fill="#b4cbb7"
+              stroke="#285a43"
+              strokeWidth="3"
+            />
+            <path d="M91 137h27v43H91zM207 138h23v42h-23z" fill="#285a43" />
+            <path d="M69 109h22v22H69zM119 109h22v22h-22zM199 110h36" fill="#d2ad62" />
+            <circle cx="269" cy="49" r="22" fill="#d2ad62" />
+            <path d="M18 147v33M294 140v40" stroke="#285a43" strokeWidth="3" />
+            <circle cx="18" cy="139" r="16" fill="#87a78b" />
+            <circle cx="294" cy="131" r="20" fill="#87a78b" />
+          </svg>
+          <p className="eyebrow">Built around belonging</p>
+          <p className="mt-3 text-2xl font-medium leading-snug">
+            Your street. Your shared spaces.
+            <br />
+            Your next chapter.
+          </p>
+          <p className="mt-4 text-sm leading-relaxed text-slate-600">
+            From board elections to neighborhood priorities, keep community decisions close to home.
+          </p>
         </div>
       </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <article className="card space-y-4">
-          <h2 className="text-xl font-semibold">Member registration</h2>
-          <p className="text-sm text-slate-700">
-            New members can register with name and email, then verify via one-time
-            email link to access ballots.
-          </p>
-          <Link href="/register" className="btn w-full justify-center">
-            Register as Member
-          </Link>
-        </article>
-
-        <article className="card space-y-4">
-          <h2 className="text-xl font-semibold">Member portal</h2>
-          <p className="text-sm text-slate-700">
-            Already verified? Sign in to see elections, request links, and review
-            submitted votes.
-          </p>
-          <Link href="/member/login" className="btn w-full justify-center">
-            Member Login
-          </Link>
-        </article>
-
-        <article className="card space-y-4">
-          <h2 className="text-xl font-semibold">Administrator login</h2>
-          <p className="text-sm text-slate-700">
-            Administrators use allowlisted email login links to manage elections
-            and review participation.
-          </p>
-          <Link href="/admin/login" className="btn-secondary w-full justify-center">
-            Log In as Admin
-          </Link>
-        </article>
-      </div>
-
-      <div className="card">
-        <h2 className="text-lg font-semibold">How it works</h2>
-        <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-3">
-          <p>1. Register members with verified email links.</p>
-          <p>2. Publish elections and distribute secure vote URLs.</p>
-          <p>3. Track turnout and export finalized results.</p>
+      <div className="border-t border-[#d8e2d9] pt-10">
+        <p className="eyebrow mb-7">From joining to having your say</p>
+        <div className="grid gap-8 sm:grid-cols-3">
+          {[
+            [
+              "01",
+              "Find your people",
+              "Choose your community and confirm its membership statements."
+            ],
+            [
+              "02",
+              "Check your inbox",
+              "Verify your email with a private link. No password needed."
+            ],
+            [
+              "03",
+              "Make your choice",
+              "Open your ballot, review your selection, and submit your vote."
+            ]
+          ].map(([n, title, body]) => (
+            <article key={n}>
+              <span className="text-sm font-semibold text-emerald-700">{n}</span>
+              <h2 className="mb-2 mt-3 text-xl font-semibold">{title}</h2>
+              <p className="text-sm leading-relaxed text-slate-600">{body}</p>
+            </article>
+          ))}
         </div>
       </div>
     </section>

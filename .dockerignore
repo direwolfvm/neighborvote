@@ -10,3 +10,8 @@ coverage
 .env.*
 !.env.example
 README.md
+output
+.playwright-cli
+docs
+tests
+.github

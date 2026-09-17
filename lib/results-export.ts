@@ -26,6 +26,7 @@ interface BuildManifestParams {
 }
 
 function csvEscape(value: string): string {
+  if (/^[\s]*[=+@-]/.test(value) || /^[\t\r\n]/.test(value)) value = `'${value}`;
   if (value.includes(",") || value.includes("\n") || value.includes("\r") || value.includes('"')) {
     return `"${value.replaceAll('"', '""')}"`;
   }
@@ -33,7 +34,14 @@ function csvEscape(value: string): string {
 }
 
 export function buildVotesCsv(rows: ExportVoteRow[]): string {
-  const header = ["member_id", "full_name", "email", "ballot_version", "vote_payload_json", "cast_at"];
+  const header = [
+    "member_id",
+    "full_name",
+    "email",
+    "ballot_version",
+    "vote_payload_json",
+    "cast_at"
+  ];
 
   const lines = rows.map((row) => {
     const values = [
@@ -48,6 +56,42 @@ export function buildVotesCsv(rows: ExportVoteRow[]): string {
   });
 
   return `${header.join(",")}\n${lines.join("\n")}\n`;
+}
+
+export interface ResultChoice {
+  id: string;
+  label: string;
+}
+export function buildResultsCsv(
+  rows: ExportVoteRow[],
+  choices: ResultChoice[],
+  manualCounts: Array<{ choiceId: string; count: number }>
+): string {
+  const recorded = new Map<string, number>();
+  for (const row of rows) {
+    const id = (row.votePayloadJson as { choiceId?: string })?.choiceId;
+    if (id) recorded.set(id, (recorded.get(id) || 0) + 1);
+  }
+  const manual = new Map(manualCounts.map((item) => [item.choiceId, item.count]));
+  return (
+    "choice_id,choice_label,electronic_votes,manual_votes,total_votes\n" +
+    choices
+      .map((choice) => {
+        const electronic = recorded.get(choice.id) || 0;
+        const paper = manual.get(choice.id) || 0;
+        return [
+          choice.id,
+          choice.label,
+          String(electronic),
+          String(paper),
+          String(electronic + paper)
+        ]
+          .map(csvEscape)
+          .join(",");
+      })
+      .join("\n") +
+    "\n"
+  );
 }
 
 export function sha256Hex(input: Buffer | string): string {
@@ -65,7 +109,9 @@ export function buildManifest(params: BuildManifestParams): Record<string, unkno
   };
 }
 
-export async function createZipBuffer(files: Array<{ path: string; content: Buffer }>): Promise<Buffer> {
+export async function createZipBuffer(
+  files: Array<{ path: string; content: Buffer }>
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const zip = new ZipFile();
     const chunks: Buffer[] = [];
@@ -116,14 +162,20 @@ export function parseGcsPath(gcsPath: string): { bucket: string; objectName: str
   };
 }
 
-export async function createSignedExportDownloadUrl(gcsPath: string, expiresInMinutes = 15): Promise<string> {
+export async function createSignedExportDownloadUrl(
+  gcsPath: string,
+  expiresInMinutes = 15
+): Promise<string> {
   const { bucket, objectName } = parseGcsPath(gcsPath);
   const storage = new Storage();
-  const [url] = await storage.bucket(bucket).file(objectName).getSignedUrl({
-    version: "v4",
-    action: "read",
-    expires: Date.now() + expiresInMinutes * 60 * 1000
-  });
+  const [url] = await storage
+    .bucket(bucket)
+    .file(objectName)
+    .getSignedUrl({
+      version: "v4",
+      action: "read",
+      expires: Date.now() + expiresInMinutes * 60 * 1000
+    });
   return url;
 }
 
@@ -131,17 +183,23 @@ export async function createAndUploadResultsBundle(params: {
   electionId: string;
   electionName: string;
   rows: ExportVoteRow[];
+  choices: ResultChoice[];
+  manualCounts: Array<{ choiceId: string; count: number }>;
 }): Promise<{ gcsPath: string; bundleSha256: string; manifest: Record<string, unknown> }> {
   const generatedAt = new Date().toISOString();
   const csvText = buildVotesCsv(params.rows);
   const csvBuffer = Buffer.from(csvText, "utf8");
 
+  const resultsBuffer = Buffer.from(
+    buildResultsCsv(params.rows, params.choices, params.manualCounts)
+  );
   const manifest = buildManifest({
     electionId: params.electionId,
     electionName: params.electionName,
     generatedAt,
     voteCount: params.rows.length,
     files: [
+      { path: "results.csv", sha256: sha256Hex(resultsBuffer), bytes: resultsBuffer.byteLength },
       {
         path: "votes.csv",
         sha256: sha256Hex(csvBuffer),
@@ -153,6 +211,7 @@ export async function createAndUploadResultsBundle(params: {
   const manifestBuffer = Buffer.from(JSON.stringify(manifest, null, 2), "utf8");
   const zipBuffer = await createZipBuffer([
     { path: "votes.csv", content: csvBuffer },
+    { path: "results.csv", content: resultsBuffer },
     { path: "manifest.json", content: manifestBuffer }
   ]);
 

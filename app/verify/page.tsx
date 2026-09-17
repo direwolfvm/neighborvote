@@ -1,46 +1,43 @@
+import Link from "next/link";
 import { SubmitButton } from "@/components/submit-button";
+import { Notice, requestErrors } from "@/components/notice";
 import { verifyMemberAction } from "@/app/verify/actions";
-
 export default async function VerifyPage({
   searchParams
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
-  const success = params.success === "1";
+  const token = typeof params.token === "string" && params.token.length <= 200 ? params.token : "";
   const error = typeof params.error === "string" ? params.error : null;
-  const token = typeof params.token === "string" ? params.token : "";
-
   return (
-    <section className="card space-y-4">
-      <h1 className="text-2xl font-semibold">Verify Membership</h1>
-
-      {success ? (
-        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">
-          Your account is verified. You can now vote in eligible elections.
+    <section className="card mx-auto max-w-lg space-y-5">
+      <p className="eyebrow">One last step</p>
+      <h1 className="text-3xl font-semibold">Make yourself at home.</h1>
+      {error && <Notice error>{requestErrors[error] || requestErrors.invalid_or_expired}</Notice>}
+      {token && !error ? (
+        <>
+          <p className="leading-relaxed text-slate-600">
+            Confirm your email to finish joining your community and see your elections.
+          </p>
+          <form action={verifyMemberAction}>
+            <input type="hidden" name="token" value={token} />
+            <SubmitButton
+              idleText="Verify my email"
+              pendingText="Verifying…"
+              className="btn w-full"
+            />
+          </form>
+        </>
+      ) : (
+        <p className="text-slate-600">
+          Open the full link from your verification email, or return to your community to request a
+          new one.
         </p>
-      ) : null}
-
-      {error ? (
-        <p className="rounded-md bg-rose-50 p-3 text-sm text-rose-700">
-          This verification link is invalid or expired. Please request a new one.
-        </p>
-      ) : null}
-
-      <form action={verifyMemberAction} className="space-y-3">
-        <label className="block text-sm">
-          Verification token
-          <input
-            className="field"
-            type="text"
-            name="token"
-            defaultValue={token}
-            required
-            autoComplete="off"
-          />
-        </label>
-        <SubmitButton idleText="Verify" pendingText="Verifying..." />
-      </form>
+      )}
+      <Link className="inline-block text-sm text-emerald-800 underline" href="/communities">
+        Find your community
+      </Link>
     </section>
   );
 }

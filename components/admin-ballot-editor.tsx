@@ -15,7 +15,10 @@ type BallotShape = {
 function defaultBallot(): BallotShape {
   return {
     title: "",
-    choices: [{ id: "option_1", label: "Option 1" }]
+    choices: [
+      { id: "option_1", label: "Option 1" },
+      { id: "option_2", label: "Option 2" }
+    ]
   };
 }
 
@@ -97,7 +100,7 @@ export function AdminBallotEditor({
       choices: [
         ...current.choices,
         {
-          id: `option_${current.choices.length + 1}`,
+          id: `option_${crypto.randomUUID().slice(0, 8)}`,
           label: `Option ${current.choices.length + 1}`
         }
       ]
@@ -185,7 +188,9 @@ export function AdminBallotEditor({
             <input
               className="field"
               value={ballot.title}
-              onChange={(event) => setBallot((current) => ({ ...current, title: event.target.value }))}
+              onChange={(event) =>
+                setBallot((current) => ({ ...current, title: event.target.value }))
+              }
               readOnly={readOnly}
             />
           </label>
@@ -193,7 +198,10 @@ export function AdminBallotEditor({
           <div className="space-y-2">
             <p className="text-sm font-medium">Options</p>
             {ballot.choices.map((choice, index) => (
-              <div key={`${choice.id}-${index}`} className="grid grid-cols-1 gap-2 rounded-md bg-white p-2 ring-1 ring-slate-200 md:grid-cols-[1fr_1fr_auto]">
+              <div
+                key={index}
+                className="grid grid-cols-1 gap-2 rounded-md bg-white p-2 ring-1 ring-slate-200 md:grid-cols-[1fr_1fr_auto]"
+              >
                 <label className="block text-xs text-slate-600">
                   Label
                   <input
@@ -226,7 +234,7 @@ export function AdminBallotEditor({
                     type="button"
                     className="btn-secondary self-end"
                     onClick={() => removeChoice(index)}
-                    disabled={ballot.choices.length <= 1}
+                    disabled={ballot.choices.length <= 2}
                   >
                     Remove
                   </button>

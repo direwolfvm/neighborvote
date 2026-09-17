@@ -12,7 +12,22 @@ describe("vote uniqueness handling", () => {
   });
 
   it("does not match unrelated errors", () => {
-    expect(isVoteUniqueViolation({ code: "23505", constraint: "members_email_unique" })).toBe(false);
+    expect(isVoteUniqueViolation({ code: "23505", constraint: "members_email_unique" })).toBe(
+      false
+    );
     expect(isVoteUniqueViolation({ code: "22001" })).toBe(false);
   });
+});
+
+it("recognizes Drizzle's wrapped PostgreSQL constraint error", () => {
+  expect(
+    isVoteUniqueViolation(
+      new Error("Query failed", {
+        cause: { code: "23505", constraint: "votes_election_member_unique" }
+      })
+    )
+  ).toBe(true);
+  const cycle: { cause?: unknown } = {};
+  cycle.cause = cycle;
+  expect(isVoteUniqueViolation(cycle)).toBe(false);
 });

@@ -11,10 +11,15 @@ export async function getMemberFromSession() {
   if (!payload) return null;
 
   const [member] = await db
-    .select({ id: members.id, fullName: members.fullName, email: members.email, status: members.status })
+    .select({
+      id: members.id,
+      fullName: members.fullName,
+      email: members.email,
+      status: members.status
+    })
     .from(members)
     .where(eq(members.id, payload.memberId))
     .limit(1);
 
-  return member ?? null;
+  return member?.status === "verified" && member.email === payload.email ? member : null;
 }

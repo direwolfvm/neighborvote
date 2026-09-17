@@ -1,14 +1,29 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import { notFound } from "next/navigation";
+import { z } from "zod";
+import { isElectionOpen } from "@/lib/election";
+import { evaluateCommunityRules } from "@/lib/community-rules";
+import { Notice } from "@/components/notice";
+import { communities, communityMemberships, electionNotifications } from "@/db/schema";
+
 import { adminLogoutAction } from "@/app/admin/login/actions";
 import { SubmitButton } from "@/components/submit-button";
 import { AdminBallotEditor } from "@/components/admin-ballot-editor";
 import { db } from "@/db/client";
-import { electionEligibility, elections, exportsTable, manualVoteCounts, members, votes } from "@/db/schema";
-import { assertAdminAccess } from "@/lib/admin";
+import {
+  electionEligibility,
+  elections,
+  exportsTable,
+  manualVoteCounts,
+  members,
+  votes
+} from "@/db/schema";
+import { getElectionActor } from "@/lib/admin";
 import { ballotSchema } from "@/lib/ballot";
 import { createSignedExportDownloadUrl } from "@/lib/results-export";
 import {
   exportElectionResultsAction,
+  retryElectionNotificationsAction,
   setManualVoteCountsAction,
   setEligibilityAction,
   updateElectionAction
@@ -21,9 +36,10 @@ interface AdminElectionPageProps {
 
 export default async function AdminElectionPage({ params, searchParams }: AdminElectionPageProps) {
   const { id } = await params;
+  if (!z.uuid().safeParse(id).success) notFound();
 
   try {
-    await assertAdminAccess();
+    await getElectionActor(id);
   } catch (error) {
     return (
       <section className="card space-y-2">
@@ -36,6 +52,7 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
   const [election] = await db
     .select({
       id: elections.id,
+      communityId: elections.communityId,
       name: elections.name,
       description: elections.description,
       status: elections.status,
@@ -58,10 +75,14 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
     );
   }
 
-  const canEditBallot = election.status === "draft" || election.status === "scheduled";
-  const canEditDescription = canEditBallot || election.status === "open";
+  const canEditBallot =
+    election.status === "draft" ||
+    (election.status === "scheduled" && election.opensAt !== null && election.opensAt > new Date());
+  const canEditDescription =
+    canEditBallot || election.status === "open" || election.status === "scheduled";
   const canEditEligibility = election.status !== "closed" && election.status !== "archived";
-  const canViewResults = election.status === "open" || election.status === "closed";
+  const canViewResults =
+    isElectionOpen(election) || election.status === "closed" || election.status === "archived";
 
   const paramsQuery = await searchParams;
   const saved = paramsQuery.saved === "1";
@@ -117,28 +138,36 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         .where(eq(votes.electionId, election.id))
     : [{ count: 0 }];
 
-  const [{ count: verifiedRaw }] = canViewResults
-    ? await db
-        .select({
-          count: sql<number>`count(*)`
-        })
-        .from(members)
-        .where(eq(members.status, "verified"))
-    : [{ count: 0 }];
-
-  const [{ count: ineligibleRaw }] = canViewResults
-    ? await db
-        .select({
-          count: sql<number>`count(*)`
-        })
-        .from(electionEligibility)
-        .where(and(eq(electionEligibility.electionId, election.id), eq(electionEligibility.eligible, false)))
-    : [{ count: 0 }];
-
+  const eligibleMembers = await db
+    .select({
+      email: members.email,
+      rules: communities.rulesJson,
+      answers: communityMemberships.answersJson,
+      excluded: electionEligibility.eligible
+    })
+    .from(communityMemberships)
+    .innerJoin(members, eq(members.id, communityMemberships.memberId))
+    .innerJoin(communities, eq(communities.id, communityMemberships.communityId))
+    .leftJoin(
+      electionEligibility,
+      and(eq(electionEligibility.memberId, members.id), eq(electionEligibility.electionId, id))
+    )
+    .where(
+      and(
+        eq(communityMemberships.communityId, election.communityId),
+        eq(communityMemberships.status, "active"),
+        eq(members.status, "verified")
+      )
+    );
   const voteTotal = Number(voteTotalRaw ?? 0);
-  const verifiedCount = Number(verifiedRaw ?? 0);
-  const ineligibleCount = Number(ineligibleRaw ?? 0);
-  const eligibleCount = Math.max(0, verifiedCount - ineligibleCount);
+  const eligibleCount = eligibleMembers.filter(
+    (m) => m.excluded !== false && evaluateCommunityRules(m.rules, m.email, m.answers).allowed
+  ).length;
+  const deliveryRows = await db
+    .select({ status: electionNotifications.status, count: sql<number>`count(*)::int` })
+    .from(electionNotifications)
+    .where(eq(electionNotifications.electionId, id))
+    .groupBy(electionNotifications.status);
 
   const manualCountsByChoice = new Map(
     manualCountRows.map((row) => [row.choiceId, Number(row.count ?? 0)])
@@ -168,24 +197,15 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
     })
   );
 
-  const opensValue = election.opensAt
-    ? new Date(election.opensAt.getTime() - election.opensAt.getTimezoneOffset() * 60 * 1000)
-        .toISOString()
-        .slice(0, 16)
-    : "";
+  const opensValue = election.opensAt ? election.opensAt.toISOString().slice(0, 16) : "";
 
-  const closesValue = election.closesAt
-    ? new Date(election.closesAt.getTime() - election.closesAt.getTimezoneOffset() * 60 * 1000)
-        .toISOString()
-        .slice(0, 16)
-    : "";
+  const closesValue = election.closesAt ? election.closesAt.toISOString().slice(0, 16) : "";
 
-  const statusOptions =
-    election.status === "draft" || election.status === "scheduled"
-      ? ["draft", "scheduled", "open", "closed", "archived"]
-      : election.status === "open" || election.status === "closed"
-        ? ["open", "closed"]
-        : ["archived"];
+  const statusOptions = canEditBallot
+    ? ["draft", "scheduled", "open", "closed", "archived"]
+    : election.status === "open" || election.status === "closed" || election.status === "scheduled"
+      ? Array.from(new Set([election.status, "open", "closed", "archived"]))
+      : ["archived"];
 
   const percentFormatter = new Intl.NumberFormat("en-US", {
     style: "percent",
@@ -214,7 +234,13 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
   return (
     <section className="space-y-4">
       <div className="card space-y-2">
-        <h1 className="text-2xl font-semibold">Manage Election</h1>
+        <a
+          className="text-sm text-emerald-800 underline"
+          href={`/admin/communities/${election.communityId}`}
+        >
+          ← Back to community
+        </a>
+        <h1 className="text-2xl font-semibold">{election.name}</h1>
         <p className="text-sm text-slate-700">
           <code>{election.id}</code>
         </p>
@@ -231,20 +257,51 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         </form>
       </div>
 
+      {deliveryRows.length > 0 && (
+        <Notice>
+          Opening emails:{" "}
+          {deliveryRows
+            .map((r) => `${r.count} ${r.status === "sent" ? "accepted by provider" : r.status}`)
+            .join(" · ")}
+          . Uncertain deliveries are not automatically resent; check Mailgun logs before retrying.
+        </Notice>
+      )}
+      {deliveryRows.some((row) => ["pending", "failed", "uncertain"].includes(row.status)) && (
+        <form action={retryElectionNotificationsAction} className="card space-y-3">
+          <input type="hidden" name="electionId" value={id} />
+          <p className="text-sm text-slate-600">
+            Send up to 20 pending or failed notices now. The scheduler continues the remaining
+            batch.
+          </p>
+          {deliveryRows.some((row) => row.status === "uncertain") && (
+            <label className="flex items-start gap-3 text-sm">
+              <input type="checkbox" name="confirmedUnsent" />I checked Mailgun logs and confirmed
+              uncertain messages were not sent. Include those in this retry.
+            </label>
+          )}
+          <SubmitButton idleText="Send pending notices" pendingText="Sending notices…" />
+        </form>
+      )}
       {saved ? (
         <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Election updated.</p>
       ) : null}
 
       {eligibilitySaved ? (
-        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Eligibility updated.</p>
+        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">
+          Eligibility updated.
+        </p>
       ) : null}
 
       {manualSaved ? (
-        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Manual counts updated.</p>
+        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">
+          Manual counts updated.
+        </p>
       ) : null}
 
       {exported ? (
-        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">Results export completed.</p>
+        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-700">
+          Results export completed.
+        </p>
       ) : null}
 
       {error ? (
@@ -256,8 +313,12 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           {error === "election_not_found" ? "Election not found." : null}
           {error === "export_failed" ? "Export failed. Check Cloud Storage configuration." : null}
           {error === "notification_failed" ? "Vote notification emails could not be sent." : null}
-          {error === "election_locked" ? "This election is locked and cannot be edited in its current state." : null}
-          {error === "invalid_manual_counts" ? "Manual counts must be whole numbers zero or greater." : null}
+          {error === "election_locked"
+            ? "This election is locked and cannot be edited in its current state."
+            : null}
+          {error === "invalid_manual_counts"
+            ? "Manual counts must be whole numbers zero or greater."
+            : null}
           {![
             "invalid_ballot_json",
             "invalid_schedule",
@@ -322,7 +383,7 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="block text-sm">
-              Opens at
+              Opens at (UTC)
               <input
                 className="field"
                 type="datetime-local"
@@ -332,7 +393,7 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
               />
             </label>
             <label className="block text-sm">
-              Closes at
+              Closes at (UTC)
               <input
                 className="field"
                 type="datetime-local"
@@ -342,23 +403,25 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
               />
             </label>
           </div>
-          <label className="block text-sm">
-            Ballot JSON
+          <div className="block text-sm">
+            <p className="mb-2 font-medium">Ballot</p>
             <AdminBallotEditor
               name="ballotJson"
               initialJson={JSON.stringify(election.ballotJson, null, 2)}
               readOnly={!canEditBallot}
             />
-          </label>
+          </div>
           {!canEditBallot ? (
-            <p className="text-xs text-slate-600">Ballot fields are locked once an election opens.</p>
+            <p className="text-xs text-slate-600">
+              Ballot fields are locked once an election opens.
+            </p>
           ) : null}
           <SubmitButton idleText="Save election" pendingText="Saving..." />
         </form>
       </div>
 
       <div className="card space-y-3">
-        <h2 className="text-lg font-semibold">Eligibility</h2>
+        <h2 className="text-lg font-semibold">Election-specific exclusions</h2>
         {canEditEligibility ? (
           <form action={setEligibilityAction} className="space-y-3">
             <input type="hidden" name="electionId" value={election.id} />
@@ -369,8 +432,8 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
             <label className="block text-sm">
               Eligible
               <select className="field" name="eligible" defaultValue="true">
-                <option value="true">true</option>
-                <option value="false">false</option>
+                <option value="true">Include, subject to community rules</option>
+                <option value="false">Exclude from this election</option>
               </select>
             </label>
             <SubmitButton idleText="Set eligibility" pendingText="Saving..." />
@@ -380,9 +443,11 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         )}
 
         <div>
-          <h3 className="text-sm font-medium">Current eligibility list</h3>
+          <h3 className="text-sm font-medium">Current election exceptions</h3>
           {eligibilityRows.length === 0 ? (
-            <p className="text-sm text-slate-600">No members listed yet.</p>
+            <p className="text-sm text-slate-600">
+              No election-specific exceptions. Community eligibility rules still apply.
+            </p>
           ) : (
             <ul className="mt-2 space-y-1 text-sm">
               {eligibilityRows.map((row) => (
@@ -404,9 +469,7 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
             <p className="font-medium">{ballotPreview.data.title}</p>
             <ul className="mt-1 list-disc pl-5">
               {ballotPreview.data.choices.map((choice) => (
-                <li key={choice.id}>
-                  {choice.id}: {choice.label}
-                </li>
+                <li key={choice.id}>{choice.label}</li>
               ))}
             </ul>
           </div>
@@ -417,19 +480,20 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">Results</h2>
           {!ballotPreview.success ? (
-            <p className="text-sm text-rose-700">Results unavailable because the ballot is invalid.</p>
+            <p className="text-sm text-rose-700">
+              Results unavailable because the ballot is invalid.
+            </p>
           ) : (
             <>
               <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700">
                 <p className="font-medium">Turnout</p>
-                {eligibleCount > 0 ? (
-                  <p>
-                    {voteTotal} of {eligibleCount} eligible voters (
-                    {percentFormatter.format(voteTotal / eligibleCount)})
-                  </p>
-                ) : (
-                  <p>{voteTotal} votes recorded. Eligibility count not available.</p>
-                )}
+                <p>
+                  {voteTotal} electronic votes recorded · {eligibleCount} currently eligible
+                  members.
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Changes to membership eligibility do not remove previously recorded votes.
+                </p>
               </div>
               <div className="space-y-3">
                 {ballotPreview.data.choices.map((choice) => {
@@ -443,13 +507,16 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-medium">{choice.label}</p>
                         <p className="text-sm text-slate-700">
-                          {total} votes ({percentFormatter.format(percent)})
+                          {total} {total === 1 ? "vote" : "votes"} (
+                          {percentFormatter.format(percent)})
                         </p>
                       </div>
                       <div className="mt-2 h-2 rounded bg-slate-200">
                         <div
                           className="h-2 rounded bg-emerald-500"
-                          style={{ width: `${totalCombined > 0 ? (total / totalCombined) * 100 : 0}%` }}
+                          style={{
+                            width: `${totalCombined > 0 ? (total / totalCombined) * 100 : 0}%`
+                          }}
                         />
                       </div>
                       <p className="mt-2 text-xs text-slate-600">
@@ -464,18 +531,22 @@ export default async function AdminElectionPage({ params, searchParams }: AdminE
         </div>
       ) : null}
 
-      {canViewResults ? (
+      {canViewResults && election.status !== "archived" ? (
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">Manual Vote Counts</h2>
           {!ballotPreview.success ? (
-            <p className="text-sm text-rose-700">Manual counts unavailable because the ballot is invalid.</p>
+            <p className="text-sm text-rose-700">
+              Manual counts unavailable because the ballot is invalid.
+            </p>
           ) : (
             <>
               <p className="text-sm text-slate-700">
                 Manual counts are added to recorded votes for reporting totals.
               </p>
               {latestManualUpdate ? (
-                <p className="text-xs text-slate-600">Last updated {latestManualUpdate.toISOString()}.</p>
+                <p className="text-xs text-slate-600">
+                  Last updated {latestManualUpdate.toISOString()}.
+                </p>
               ) : null}
               <form action={setManualVoteCountsAction} className="space-y-3">
                 <input type="hidden" name="electionId" value={election.id} />

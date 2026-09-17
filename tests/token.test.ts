@@ -11,6 +11,6 @@ describe("token utilities", () => {
   it("hashes token to fixed SHA256 hex", () => {
     const hash = sha256Hex("abc123");
     expect(hash).toHaveLength(64);
-    expect(hash).toBe("6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d23925329c3e4a8a1f6f");
+    expect(hash).toBe("6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090");
   });
 });

@@ -4,8 +4,9 @@ substitutions:
   _AR_REPO: cloud-run-source-deploy
   _CLOUDSQL_INSTANCE: ""
   _SERVICE_ACCOUNT: ""
-  _APP_BASE_URL: ""
+  _APP_BASE_URL: "https://neighborvote.online"
   _GCS_EXPORT_BUCKET: ""
+  _ALLOW_COMMUNITY_MIGRATION: "false"
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -25,6 +26,31 @@ steps:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$BUILD_ID
 
+  - id: Configure migration job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_SERVICE}-migrate
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$BUILD_ID
+      - --region=${_REGION}
+      - --service-account=${_SERVICE_ACCOUNT}
+      - --set-cloudsql-instances=${_CLOUDSQL_INSTANCE}
+      - --set-secrets=DATABASE_URL=NEIGHBORVOTE_DATABASE_URL:latest
+      - --set-env-vars=ALLOW_COMMUNITY_MIGRATION=${_ALLOW_COMMUNITY_MIGRATION}
+      - --command=node
+      - --args=scripts/migrate.mjs
+      - --max-retries=0
+      - --task-timeout=10m
+      - --quiet
+
+  - id: Migrate database before serving new revision
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args: [run, jobs, execute, "${_SERVICE}-migrate", "--region=${_REGION}", --wait, --quiet]
+
   - id: Deploy Cloud Run
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
@@ -37,10 +63,14 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --port=8080
+      - --max-instances=10
+      - --concurrency=40
+      - --timeout=360
+      - --startup-probe=httpGet.path=/api/health,httpGet.port=8080,initialDelaySeconds=5,periodSeconds=10,failureThreshold=12
       - --service-account=${_SERVICE_ACCOUNT}
       - --set-cloudsql-instances=${_CLOUDSQL_INSTANCE}
-      - --set-env-vars=APP_BASE_URL=${_APP_BASE_URL},MAIL_PROVIDER=mailgun,GCS_EXPORT_BUCKET=${_GCS_EXPORT_BUCKET},RUN_DB_MIGRATIONS=0
-      - --set-secrets=DATABASE_URL=DATABASE_URL:latest,MAILGUN_API_KEY=MAILGUN_API_KEY:latest,MAILGUN_DOMAIN=MAILGUN_DOMAIN:latest,MAIL_FROM=MAIL_FROM:latest,ADMIN_EMAILS=ADMIN_EMAILS:latest,ADMIN_SESSION_SECRET=ADMIN_SESSION_SECRET:latest,MEMBER_SESSION_SECRET=MEMBER_SESSION_SECRET:latest,CRON_JOB_TOKEN=CRON_JOB_TOKEN:latest
+      - --set-env-vars=APP_BASE_URL=${_APP_BASE_URL},MAIL_PROVIDER=mailgun,MAILGUN_TEST_MODE=false,GCS_EXPORT_BUCKET=${_GCS_EXPORT_BUCKET},RUN_DB_MIGRATIONS=0
+      - --set-secrets=DATABASE_URL=NEIGHBORVOTE_DATABASE_URL:latest,MAILGUN_API_KEY=NEIGHBORVOTE_MAILGUN_API_KEY:latest,MAILGUN_DOMAIN=NEIGHBORVOTE_MAILGUN_DOMAIN:latest,MAIL_FROM=NEIGHBORVOTE_MAIL_FROM:latest,ADMIN_EMAILS=NEIGHBORVOTE_ADMIN_EMAILS:latest,ADMIN_SESSION_SECRET=NEIGHBORVOTE_ADMIN_SESSION_SECRET:latest,MEMBER_SESSION_SECRET=NEIGHBORVOTE_MEMBER_SESSION_SECRET:latest,CRON_JOB_TOKEN=NEIGHBORVOTE_CRON_JOB_TOKEN:latest
       - --quiet
 
 images:

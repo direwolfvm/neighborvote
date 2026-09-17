@@ -40,6 +40,7 @@ export function createAdminSessionToken(email: string, ttlSeconds = 60 * 60 * 8)
 }
 
 export function verifyAdminSessionToken(token: string): { email: string; exp: number } | null {
+  if (token.split(".").length !== 2) return null;
   const [encodedPayload, signature] = token.split(".");
   if (!encodedPayload || !signature) return null;
 

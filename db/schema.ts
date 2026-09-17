@@ -28,10 +28,7 @@ export const electionStatusEnum = pgEnum("election_status", [
   "archived"
 ]);
 
-export const verificationMethodEnum = pgEnum("verification_method", [
-  "email_link",
-  "admin_import"
-]);
+export const verificationMethodEnum = pgEnum("verification_method", ["email_link", "admin_import"]);
 
 export const staffRoleEnum = pgEnum("staff_role", ["admin", "election_manager"]);
 
@@ -53,7 +50,50 @@ export const members = pgTable(
   ]
 );
 
+export const communities = pgTable("communities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: varchar("slug", { length: 80 }).notNull().unique(),
+  name: varchar("name", { length: 200 }).notNull(),
+  description: text("description"),
+  contactEmail: varchar("contact_email", { length: 320 }),
+  rulesJson: jsonb("rules_json")
+    .notNull()
+    .default({
+      registrationOpen: true,
+      allowedPostalCodes: [],
+      blockedEmails: [],
+      blockedEmailDomains: [],
+      requiredAttestations: []
+    }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+});
+export const communityMemberships = pgTable(
+  "community_memberships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => communities.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    answersJson: jsonb("answers_json").notNull().default({ postalCode: "", attestations: [] }),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    unique("community_memberships_community_id_member_id_key").on(
+      table.communityId,
+      table.memberId
+    ),
+    check("community_memberships_status_check", sql`${table.status} in ('active', 'excluded')`)
+  ]
+);
+
 export const elections = pgTable("elections", {
+  communityId: uuid("community_id")
+    .notNull()
+    .references(() => communities.id),
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 200 }).notNull(),
   description: text("description"),
@@ -62,6 +102,7 @@ export const elections = pgTable("elections", {
   closesAt: timestamp("closes_at", { withTimezone: true }),
   ballotJson: jsonb("ballot_json").notNull(),
   ballotVersion: varchar("ballot_version", { length: 50 }).notNull(),
+  notificationQueuedAt: timestamp("notification_queued_at", { withTimezone: true }),
   notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
   notificationSentCount: integer("notification_sent_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
@@ -82,10 +123,7 @@ export const electionEligibility = pgTable(
     includedAt: timestamp("included_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => [
-    unique("election_eligibility_election_member_unique").on(
-      table.electionId,
-      table.memberId
-    )
+    unique("election_eligibility_election_member_unique").on(table.electionId, table.memberId)
   ]
 );
 
@@ -141,7 +179,10 @@ export const manualVoteCounts = pgTable(
     updatedBy: varchar("updated_by", { length: 320 }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },
-  (table) => [unique("manual_vote_counts_election_choice_unique").on(table.electionId, table.choiceId)]
+  (table) => [
+    unique("manual_vote_counts_election_choice_unique").on(table.electionId, table.choiceId),
+    check("manual_vote_counts_nonnegative", sql`${table.count} >= 0`)
+  ]
 );
 
 export const auditEvents = pgTable("audit_events", {
@@ -168,6 +209,10 @@ export const exportsTable = pgTable("exports", {
 export const memberVerificationSessions = pgTable(
   "member_verification_sessions",
   {
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => communities.id, { onDelete: "cascade" }),
+    answersJson: jsonb("answers_json").notNull().default({ postalCode: "", attestations: [] }),
     id: uuid("id").primaryKey().defaultRandom(),
     memberId: uuid("member_id")
       .notNull()
@@ -202,6 +247,9 @@ export const adminLoginTokens = pgTable(
 export const staffRoles = pgTable(
   "staff_roles",
   {
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => communities.id, { onDelete: "cascade" }),
     id: uuid("id").primaryKey().defaultRandom(),
     email: varchar("email", { length: 320 }).notNull(),
     role: staffRoleEnum("role").notNull(),
@@ -209,7 +257,8 @@ export const staffRoles = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => [
-    unique("staff_roles_email_unique").on(table.email),
+    unique("staff_roles_community_email_unique").on(table.communityId, table.email),
+    index("staff_roles_email_idx").on(table.email),
     check("staff_roles_email_lowercase", sql`${table.email} = lower(${table.email})`)
   ]
 );
@@ -234,3 +283,41 @@ export const memberLoginTokens = pgTable(
 
 export type Member = typeof members.$inferSelect;
 export type NewMember = typeof members.$inferInsert;
+
+export const emailRateLimits = pgTable(
+  "email_rate_limits",
+  {
+    key: varchar("key", { length: 64 }).primaryKey(),
+    count: integer("count").notNull().default(1),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [index("email_rate_limits_expiry_idx").on(table.expiresAt)]
+);
+
+export const electionNotifications = pgTable(
+  "election_notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    electionId: uuid("election_id")
+      .notNull()
+      .references(() => elections.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    providerMessageId: text("provider_message_id"),
+    lastError: varchar("last_error", { length: 100 })
+  },
+  (table) => [
+    unique("election_notifications_election_id_member_id_key").on(table.electionId, table.memberId),
+    index("election_notifications_pending_idx").on(table.status, table.nextAttemptAt),
+    check(
+      "election_notifications_status_check",
+      sql`${table.status} in ('pending', 'sending', 'sent', 'failed', 'uncertain', 'skipped')`
+    )
+  ]
+);

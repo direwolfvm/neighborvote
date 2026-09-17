@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { parseAdminEmails } from "@/lib/email";
 
 const ADMIN_SESSION_COOKIE = "nv_admin_session";
 
@@ -29,6 +28,7 @@ async function verifySessionToken(token: string): Promise<{ email: string; exp: 
   const secret = process.env.ADMIN_SESSION_SECRET;
   if (!secret || secret.length < 32) return null;
 
+  if (token.split(".").length !== 2) return null;
   const [encodedPayload, signature] = token.split(".");
   if (!encodedPayload || !signature) return null;
 
@@ -43,7 +43,11 @@ async function verifySessionToken(token: string): Promise<{ email: string; exp: 
     false,
     ["sign"]
   );
-  const expectedSigRaw = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(encodedPayload));
+  const expectedSigRaw = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(encodedPayload)
+  );
   const expectedSig = btoa(String.fromCharCode(...new Uint8Array(expectedSigRaw)))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
@@ -66,9 +70,8 @@ export async function middleware(request: NextRequest) {
 
   const token = request.cookies.get(ADMIN_SESSION_COOKIE)?.value;
   const payload = token ? await verifySessionToken(token) : null;
-  const allowed = parseAdminEmails(process.env.ADMIN_EMAILS);
 
-  if (!payload || !allowed.has(payload.email.toLowerCase())) {
+  if (!payload) {
     const loginUrl = new URL("/admin/login", request.url);
     loginUrl.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(loginUrl);

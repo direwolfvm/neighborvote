@@ -29,7 +29,11 @@ function sign(value: string): string {
   return createHmac("sha256", getSessionSecret()).update(value).digest("base64url");
 }
 
-export function createMemberSessionToken(memberId: string, email: string, ttlSeconds = 60 * 60 * 24 * 7): string {
+export function createMemberSessionToken(
+  memberId: string,
+  email: string,
+  ttlSeconds = 60 * 60 * 24 * 7
+): string {
   const payload = {
     memberId,
     email: email.toLowerCase(),
@@ -41,7 +45,10 @@ export function createMemberSessionToken(memberId: string, email: string, ttlSec
   return `${encodedPayload}.${signature}`;
 }
 
-export function verifyMemberSessionToken(token: string): { memberId: string; email: string; exp: number } | null {
+export function verifyMemberSessionToken(
+  token: string
+): { memberId: string; email: string; exp: number } | null {
+  if (token.split(".").length !== 2) return null;
   const [encodedPayload, signature] = token.split(".");
   if (!encodedPayload || !signature) return null;
 

@@ -1,278 +1,93 @@
 # NeighborVote
 
-Open source electronic voting system for a neighborhood citizens association.
+Trust-based voting for neighborhood communities. People self-register, meet their community’s conditions, verify their email, and vote without a manual approval queue.
 
-This scaffold includes:
-- Next.js App Router + TypeScript
-- Postgres schema + SQL migrations
-- Drizzle ORM type-safe DB access
-- Self-registration and email verification flow (`/register`, `/verify`)
-- Admin election management and member import flow
-- Voting magic-link flow with one-vote DB constraint enforcement
+## What’s included
 
-## Tech stack
+- Communities with separate rosters, managers, registration rules, and elections.
+- Optional allowed postal codes, blocked emails/domains, and required membership attestations.
+- Optional GIS screening: upload a WGS84 GeoJSON Polygon/MultiPolygon and check a self-reported US address using Census geocoding. No identity documents or proof-of-residence workflow.
+- Branded Mailgun HTML/plain-text email, one-time links, shared database-backed throttling, and retryable per-recipient election notices.
+- Draft/scheduled/open/closed elections, ballot review, final submission receipts, database-enforced single voting, election exclusions, manual counts, and audited result exports.
+- Scoped staff access, hardened sessions/redirects, health checks, container packaging, and CI.
 
-- Next.js (App Router)
-- TypeScript
-- Postgres (Cloud SQL compatible)
-- Drizzle ORM
-- Zod
-- Tailwind CSS
-- Mailgun email delivery (SendGrid fallback supported)
+This is **not a secret-ballot system**: stored votes and staff exports include member identities. Geocoding checks an approximate address location, not that the applicant lives there. The public help page explains both.
 
 ## Local development
 
-1. Install dependencies:
+Requires Node.js 22+ and PostgreSQL 16.
 
-```bash
-npm install
-```
-
-2. Start Postgres via Docker Compose:
-
-```bash
+```sh
+npm ci
+cp .env.example .env.local
+# Edit .env.local: database, Mailgun credentials, and random session secrets.
 docker compose up -d
-```
-
-3. Configure environment:
-
-```bash
-cp .env.example .env
-```
-
-4. Run migrations:
-
-```bash
 npm run db:migrate
-```
-
-5. Seed sample election:
-
-```bash
 npm run db:seed
-```
-
-6. Start app:
-
-```bash
 npm run dev
 ```
 
-## Required environment variables
+The current task’s ignored `.env.local` uses a separate local database on port **5433** and Mailgun **test mode**. `docker compose` defaults to port 5432; adjust the URL if using Compose. Never copy another project’s database connection or session keys into this app.
 
-- `DATABASE_URL`: Postgres connection string
-- `APP_BASE_URL`: base URL used in email links
-- `ADMIN_EMAILS`: comma-separated admin allowlist (case-insensitive)
-- `ADMIN_SESSION_SECRET`: at least 32 characters; signs admin session cookies
-- `MEMBER_SESSION_SECRET`: at least 32 characters; signs member session cookies
-- `MAIL_PROVIDER`: `mailgun` (default) or `sendgrid`
-- `MAIL_FROM`: sender email
-- `MAILGUN_API_KEY`: Mailgun API key
-- `MAILGUN_DOMAIN`: Mailgun sending domain (e.g. `neighborvote.online`)
-- `MAILGUN_API_BASE_URL`: optional; defaults to `https://api.mailgun.net`
-- `SENDGRID_API_KEY`: optional, only if `MAIL_PROVIDER=sendgrid`
-- `GCS_EXPORT_BUCKET`: Cloud Storage bucket for export bundles (next phase)
-- `CRON_JOB_TOKEN`: token required by the scheduled notification endpoint
+`db:migrate` reads `.env.local` when DATABASE_URL is not injected; it is transactional and serialized with an advisory lock. `db:seed` is idempotent, local only, and creates an example election.
 
-## Routes
+## Community setup
 
-- `/register` member self-registration
-- `/verify` email verification
-- `/elections/[id]` voter election page scaffold
-- `/admin` election creation + bulk member import
-- `/admin/elections/[id]` election settings + eligibility management
-- `/admin/login` admin magic-link login
-- `/member` member portal
-- `/member/login` member magic-link login
-- `/api/jobs/election-open-notifications` scheduled job endpoint for open-election notifications
+1. Sign in using an address in `ADMIN_EMAILS` (platform administrators).
+2. Create a community, or configure the migrated **NeighborVote Community**.
+3. Set its name, description, and a monitored manager contact email.
+4. Keep self-registration enabled. Add only the eligibility filters your community needs; leaving filters blank accepts verified emails.
+5. Optionally upload a neighborhood boundary. Files may be GeoJSON geometry, Feature, or a single-feature FeatureCollection, with Polygon/MultiPolygon geometry; maximum 500 KB / 5,000 vertices. Coordinates must be WGS84 longitude/latitude.
+6. Add community staff. A community administrator may manage staff in that community; a community manager may manage its settings, membership, and elections. Platform administrators can manage all communities.
+7. Share `/communities/<slug>`, create a draft election, and publish or schedule it.
 
-Admin routes now require a cookie session issued via one-time admin magic link and checked by middleware against `ADMIN_EMAILS`.
+Postal codes are matched exactly after removing spaces/hyphens and normalizing case. Blocked domains include subdomains. All required statements must be checked. A boundary adds server-side geocoding; missing, ambiguous, outside, or edge matches fail with a recoverable explanation. Address screening currently supports US addresses only. Optional screening uses the [Census Geocoder API](https://geocoding.geo.census.gov/geocoder/Geocoding_Services_API.html); Census describes its coordinates as [interpolated address-range locations](https://www.census.gov/programs-surveys/geography/technical-documentation/complete-technical-documentation/census-geocoder.html).
 
-## Registration + verification flow
+Conditions are rechecked when email verification is consumed, ballot links are requested, notices are sent, and votes are submitted. Updating an attestation changes its ID and asks existing members to confirm the new statement. Closing registration alone does not revoke existing memberships. Exclusions cannot be bypassed by registering again. Changes do not remove votes already recorded.
 
-1. User submits full name + email at `/register`.
-2. Email is normalized to lowercase and upserted in `members`.
-3. A one-time verification token is generated, hashed with SHA256, and stored in `member_verification_sessions`.
-4. Verification link is emailed.
-5. `/verify` validates token hash, expiry, and one-time usage.
-6. On success, member status is updated to `verified` and audit event is written.
+## Email
 
-## Database migrations
+Production identity: `NeighborVote <no-reply@neighborvote.online>`, application origin `https://neighborvote.online`.
 
-- SQL migrations are in `migrations/`.
-- Core tables and constraints from the spec are included.
-- One additional table `member_verification_sessions` is included for passwordless account verification links.
+Required: `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAIL_FROM`; optional `MAIL_REPLY_TO` and `MAILGUN_API_BASE_URL` (`https://api.mailgun.net` or EU counterpart). Use a domain sending key for production. Store secrets in Secret Manager; never commit `.env.local`. The supplied account key is held in ignored local configuration and the application’s dedicated Secret Manager secret.
 
-## Testing
+```sh
+npm run mail:check
+```
 
-Run unit tests:
+This always submits in [Mailgun test mode](https://documentation.mailgun.com/docs/mailgun/user-manual/sending-messages/test-mode), never delivers an email, and creates `output/email/verification.html` for preview. Test acceptance is not proof of inbox delivery. Set `MAILGUN_TEST_MODE=false` in production. All private-link emails disable click/open tracking and contain text, HTML, expiry, fallback links, and help.
 
-```bash
+Email limits are shared across app instances: one request per email per minute, five per hour, and a global cap of 100/minute. Mailgun requests time out after 15 seconds. Explicit failures can be retried; ambiguous transport outcomes become `uncertain` so the system does not automatically duplicate mail.
+
+Configure Cloud Scheduler to `POST /api/jobs/election-open-notifications` every minute with `x-cron-token` equal to `CRON_JOB_TOKEN` and a 360-second attempt deadline. Each run claims at most 20 recipients, using row locks and unique election/member records. Overlapping runs do not claim the same recipient. The manager screen shows accepted, pending, failed, skipped, or uncertain counts and offers a scoped retry action. Check Mailgun logs before explicitly including uncertain recipients. A “sent” row means accepted by the provider, not confirmed inbox delivery.
+
+## Validation
+
+```sh
+npm run lint
+npm run typecheck
 npm test
+TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5433/neighborvote_test npm run test:db
+npm audit
+npm run build
 ```
 
-Current tests cover:
-- token generation/hash behavior
-- import deconfliction by case-insensitive email
-- CSV import parsing
-- election open-window logic
-- election notification trigger rules
-- export bundle CSV/manifest/hash helpers
-- admin session token signing/verification
-- member session token signing/verification
-- GCS path parsing helper
-- vote uniqueness constraint error handling helper
+The database test command requires a disposable local database named `neighborvote_test`; it refuses other names/remote hosts. It applies migrations and truncates test data. Unit tests do not contact Mailgun or a geocoder. Integration tests use real PostgreSQL and mocked email delivery. CI runs lint, types, unit/integration tests, a production dependency audit, and a build.
 
-## Cloud Run deployment (GitHub push to `main`)
+## Production release
 
-This repo includes:
-- `Dockerfile` for Next.js standalone runtime
-- `cloudbuild.yaml` for build + deploy
-- optional startup migration execution (`RUN_DB_MIGRATIONS`, default `0` in Cloud Build deploy step)
+Read [the production handoff](docs/production-readiness.md) before deployment. The release record is maintained there; application checks do not establish inbox delivery.
 
-### 1. Required project values
+`cloudbuild.yaml` builds an image, configures and runs a Cloud Run migration job, then deploys the new service. Configure `_REGION`, `_SERVICE`, `_AR_REPO`, `_CLOUDSQL_INSTANCE`, `_SERVICE_ACCOUNT`, and `_GCS_EXPORT_BUCKET`; `_APP_BASE_URL` defaults to the approved domain. Migration failure stops deployment. The runtime is non-root, uses `npm ci`, validates required production settings, and exposes `/api/health` for startup checks. The migration job bypasses web startup validation and needs only DATABASE_URL.
 
-- Project: `permitting-ai-helper`
-- Region: `us-east4`
-- Cloud SQL instance: `permitting-ai-helper:us-east4:metabase-sql`
-- Database name: `neighborvote`
-- Cloud Run service: `neighborvote`
+**The first community migration needs a maintenance release window.** The proof-of-concept revision is not compatible with the new required community columns and staff constraint. The migration refuses a populated production database unless `_ALLOW_COMMUNITY_MIGRATION=true` is explicitly supplied to the build. Stop writes/traffic from the old revision before applying 0008, then route traffic to the new image. Do not roll the old image back onto the migrated schema. Back up the database first and restore the pre-migration backup if that rollback is necessary. Later compatible migrations may use the normal job-before-deploy workflow.
 
-### 2. Enable required APIs
+Secret Manager names used by the build have the `NEIGHBORVOTE_` prefix: `NEIGHBORVOTE_DATABASE_URL`, `NEIGHBORVOTE_MAILGUN_API_KEY`, `NEIGHBORVOTE_MAILGUN_DOMAIN`, `NEIGHBORVOTE_MAIL_FROM`, `NEIGHBORVOTE_ADMIN_EMAILS`, `NEIGHBORVOTE_ADMIN_SESSION_SECRET`, `NEIGHBORVOTE_MEMBER_SESSION_SECRET`, and `NEIGHBORVOTE_CRON_JOB_TOKEN`. The prefix isolates this application from other services in the project; runtime environment variable names remain unprefixed. Runtime needs Cloud SQL Client, secret access, and bucket-scoped export permissions; signed URLs also require a signing-capable identity. Build identity needs permission to deploy/execute Cloud Run jobs and act as the runtime service account. Enable Cloud SQL backups/PITR, HTTPS/domain routing, notification scheduling, and uptime/error monitoring before launch.
 
-```bash
-gcloud config set project permitting-ai-helper
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com
-```
+## Data and exports
 
-### 3. Create required secrets
+Migration 0008 places existing elections, members, and staff in the default community. User email remains global, but membership and authority are scoped per community. Imported names never overwrite an existing global account; imported members still need email verification and current community conditions.
 
-Create or update these Secret Manager secrets:
-- `DATABASE_URL`
-- `MAILGUN_API_KEY`
-- `MAILGUN_DOMAIN`
-- `MAIL_FROM`
-- `ADMIN_EMAILS`
-- `ADMIN_SESSION_SECRET`
-- `MEMBER_SESSION_SECRET`
-- `CRON_JOB_TOKEN`
+Export bundles contain identifiable `votes.csv`, aggregate `results.csv` (electronic + manual totals), and a SHA-256 manifest. Files are private in GCS and downloads use short-lived signed URLs. Spreadsheet formula prefixes are neutralized. Manual counts are administrative totals; operators must prevent paper/electronic double counting. Agree on the association’s retention and correction process before launch.
 
-`DATABASE_URL` should use Cloud SQL unix socket format:
-
-```text
-postgres://<DB_USER>:<DB_PASSWORD>@/neighborvote?host=/cloudsql/permitting-ai-helper:us-east4:metabase-sql
-```
-
-Example secret creation:
-
-```bash
-printf '%s' 'postgres://<DB_USER>:<DB_PASSWORD>@/neighborvote?host=/cloudsql/permitting-ai-helper:us-east4:metabase-sql' | gcloud secrets create DATABASE_URL --data-file=- || true
-printf '%s' '<mailgun-api-key>' | gcloud secrets create MAILGUN_API_KEY --data-file=- || true
-printf '%s' 'neighborvote.online' | gcloud secrets create MAILGUN_DOMAIN --data-file=- || true
-printf '%s' 'no-reply@your-domain.com' | gcloud secrets create MAIL_FROM --data-file=- || true
-printf '%s' 'admin1@example.com,admin2@example.com' | gcloud secrets create ADMIN_EMAILS --data-file=- || true
-printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create ADMIN_SESSION_SECRET --data-file=- || true
-printf '%s' '<at-least-32-char-random-secret>' | gcloud secrets create MEMBER_SESSION_SECRET --data-file=- || true
-printf '%s' '<random-cron-token>' | gcloud secrets create CRON_JOB_TOKEN --data-file=- || true
-```
-
-To rotate/update an existing secret:
-
-```bash
-printf '%s' '<new-value>' | gcloud secrets versions add SECRET_NAME --data-file=-
-```
-
-### 4. Ensure Cloud Run runtime service account access
-
-Current runtime service account:
-- `650621702399-compute@developer.gserviceaccount.com`
-
-Grant at least:
-- `roles/cloudsql.client`
-- `roles/secretmanager.secretAccessor`
-- `roles/storage.objectAdmin` (or narrower bucket-scoped write/read for exports)
-
-### 5. Replace trigger to use `cloudbuild.yaml`
-
-Existing trigger (`856a26dd-2781-4174-8ecc-0ce8ef2221e9`) currently uses inline build steps and bypasses `cloudbuild.yaml`.
-
-Delete old trigger:
-
-```bash
-gcloud builds triggers delete 856a26dd-2781-4174-8ecc-0ce8ef2221e9 --quiet
-```
-
-Create new GitHub trigger (push to `main`) using repo config:
-
-```bash
-gcloud builds triggers create github \
-  --name=neighborvote-main \
-  --repo-owner=direwolfvm \
-  --repo-name=neighborvote \
-  --branch-pattern='^main$' \
-  --build-config=cloudbuild.yaml \
-  --substitutions=_SERVICE=neighborvote,_REGION=us-east4,_AR_REPO=cloud-run-source-deploy,_CLOUDSQL_INSTANCE=permitting-ai-helper:us-east4:metabase-sql,_SERVICE_ACCOUNT=650621702399-compute@developer.gserviceaccount.com,_APP_BASE_URL=https://neighborvote-wiz2ttea4a-uk.a.run.app,_GCS_EXPORT_BUCKET=<your-export-bucket>
-```
-
-### 6. Run a manual build once (for verification)
-
-```bash
-gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_SERVICE=neighborvote,_REGION=us-east4,_AR_REPO=cloud-run-source-deploy,_CLOUDSQL_INSTANCE=permitting-ai-helper:us-east4:metabase-sql,_SERVICE_ACCOUNT=650621702399-compute@developer.gserviceaccount.com,_APP_BASE_URL=https://neighborvote-wiz2ttea4a-uk.a.run.app,_GCS_EXPORT_BUCKET=<your-export-bucket>
-```
-
-### 7. Troubleshooting checklist
-
-- If build fails with `Dockerfile: no such file`: trigger is still using old config or commit lacks `Dockerfile`.
-- If build fails with `if 'build.service_account' is specified...`: add `options.logging: CLOUD_LOGGING_ONLY` (or a logs bucket/default logs bucket behavior) to `cloudbuild.yaml`.
-- If deploy succeeds but app fails startup:
-  - check Cloud Run logs:
-    `gcloud run services logs read neighborvote --region us-east4 --limit 200`
-  - verify `DATABASE_URL` secret format and Cloud SQL instance annotation.
-- If DB connection fails:
-  - ensure runtime service account has `roles/cloudsql.client`.
-- If secret access fails:
-  - ensure runtime service account has `roles/secretmanager.secretAccessor`.
-- If exports fail:
-  - ensure `GCS_EXPORT_BUCKET` exists and runtime service account has storage permissions.
-
-## Bulk import flow
-
-1. Admin uploads CSV (`name,email`) on `/admin`.
-2. Emails are normalized and deconflicted case-insensitively.
-3. Members are upserted by email and audit events are written.
-4. Imported voters are eligible by default unless explicitly marked ineligible in election eligibility settings.
-
-## Voting flow
-
-1. Voter enters email at `/elections/[id]`.
-2. If member is verified, not explicitly marked ineligible for that election, and election is open, a one-time magic link is emailed.
-3. Link token is SHA256 hashed in `vote_sessions`.
-4. Voter submits a ballot choice from election ballot JSON.
-5. Vote is inserted into `votes`; duplicate voting is prevented by `unique(election_id, member_id)`.
-
-## Election opening notifications
-
-- Notifications are sent once per election and tracked in:
-  - `elections.notification_sent_at`
-  - `elections.notification_sent_count`
-- Notifications trigger when:
-  - election status is `open` and `opens_at` is `null` (immediate), or
-  - election status is `open` and `opens_at <= now`.
-- Admin election save attempts immediate dispatch for that election.
-- For scheduled openings, configure Cloud Scheduler to call:
-  - `POST /api/jobs/election-open-notifications`
-  - header `x-cron-token: <CRON_JOB_TOKEN>`
-
-## Result exports
-
-On `/admin/elections/[id]`, admins can trigger export generation:
-1. Query votes joined with members for the election.
-2. Build `votes.csv`.
-3. Build `manifest.json` containing file hashes and metadata.
-4. Create a zip bundle with both files.
-5. Upload zip to `gs://$GCS_EXPORT_BUCKET/exports/<election-id>/...`.
-6. Store bundle path and bundle SHA256 in `exports`.
-
-Cloud Run service account needs write access to the export bucket (for example, `roles/storage.objectAdmin` scoped to that bucket).
-Signed download URLs are generated in admin UI for existing exports.
+For an incompatible upgrade, build the release image first. Temporarily pause the build trigger and notification scheduler, route all traffic to that image with `node scripts/maintenance.mjs`, wait for requests to the old revision to drain, and take the pre-upgrade backup. Run the migration job with the explicit gate, then deploy the image with its default command. Restore the scheduler and automatic deployment only after health and data-preservation checks pass.

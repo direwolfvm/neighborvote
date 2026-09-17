@@ -2,70 +2,73 @@
 
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/db/client";
 import { auditEvents, memberLoginTokens, members } from "@/db/schema";
 import { MEMBER_SESSION_COOKIE, createMemberSessionToken } from "@/lib/member-session";
 import { generateOpaqueToken, sha256Hex } from "@/lib/crypto";
 import { normalizeEmail } from "@/lib/email";
-import { sendEmail } from "@/lib/mailer";
+import { sendTemplatedEmail } from "@/lib/mailer";
+import { allowEmailRequest } from "@/lib/rate-limit";
 import { appBaseUrl } from "@/lib/urls";
 
 const requestSchema = z.object({
-  email: z.string().email().max(320)
+  email: z.string().trim().email().max(320)
 });
 
 export async function requestMemberLoginAction(formData: FormData) {
-  const parsed = requestSchema.safeParse({
-    email: formData.get("email")
-  });
+  try {
+    const parsed = requestSchema.safeParse({
+      email: formData.get("email")
+    });
 
-  if (!parsed.success) {
-    redirect("/member/login?error=invalid_email");
-  }
-
-  const email = normalizeEmail(parsed.data.email);
-
-  const [member] = await db
-    .select({ id: members.id, status: members.status })
-    .from(members)
-    .where(eq(members.email, email))
-    .limit(1);
-
-  if (!member || member.status !== "verified") {
-    redirect("/member/login?sent=1");
-  }
-
-  const token = generateOpaqueToken();
-  const tokenHash = sha256Hex(token);
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
-
-  await db.insert(memberLoginTokens).values({
-    memberId: member.id,
-    tokenHash,
-    expiresAt
-  });
-
-  const verifyUrl = new URL("/member/login/verify", appBaseUrl());
-  verifyUrl.searchParams.set("token", token);
-
-  await sendEmail({
-    to: email,
-    subject: "NeighborVote member login",
-    text: `Use this one-time login link: ${verifyUrl.toString()}`
-  });
-
-  await db.insert(auditEvents).values({
-    electionId: null,
-    actor: email,
-    action: "member.login_link_requested",
-    detailsJson: {
-      memberId: member.id
+    if (!parsed.success) {
+      redirect("/member/login?error=invalid_email");
     }
-  });
 
-  redirect("/member/login?sent=1");
+    const email = normalizeEmail(parsed.data.email);
+    if (!(await allowEmailRequest(email))) redirect("/member/login?error=rate_limited");
+
+    const [member] = await db
+      .select({ id: members.id, status: members.status })
+      .from(members)
+      .where(eq(members.email, email))
+      .limit(1);
+
+    if (!member || member.status !== "verified") {
+      redirect("/member/login?sent=1");
+    }
+
+    const token = generateOpaqueToken();
+    const tokenHash = sha256Hex(token);
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
+
+    await db.insert(memberLoginTokens).values({
+      memberId: member.id,
+      tokenHash,
+      expiresAt
+    });
+
+    const verifyUrl = new URL("/member/login/verify", appBaseUrl());
+    verifyUrl.searchParams.set("token", token);
+
+    await sendTemplatedEmail(email, "member-login", verifyUrl.toString());
+
+    await db.insert(auditEvents).values({
+      electionId: null,
+      actor: email,
+      action: "member.login_link_requested",
+      detailsJson: {
+        memberId: member.id
+      }
+    });
+
+    redirect("/member/login?sent=1");
+  } catch (error) {
+    unstable_rethrow(error);
+    redirect("/member/login?error=send_failed");
+  }
 }
 
 const verifySchema = z.object({
@@ -96,7 +99,8 @@ export async function verifyMemberLoginAction(formData: FormData) {
       and(
         eq(memberLoginTokens.tokenHash, tokenHash),
         isNull(memberLoginTokens.usedAt),
-        gt(memberLoginTokens.expiresAt, now)
+        gt(memberLoginTokens.expiresAt, now),
+        eq(members.status, "verified")
       )
     )
     .limit(1);
