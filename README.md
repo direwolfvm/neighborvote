@@ -49,7 +49,7 @@ Conditions are rechecked when email verification is consumed, ballot links are r
 
 Production identity: `NeighborVote <no-reply@neighborvote.online>`, application origin `https://neighborvote.online`.
 
-Required: `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAIL_FROM`; optional `MAIL_REPLY_TO` and `MAILGUN_API_BASE_URL` (`https://api.mailgun.net` or EU counterpart). Use a domain sending key for production. Store secrets in Secret Manager; never commit `.env.local`. The supplied account key is held in ignored local configuration and the application’s dedicated Secret Manager secret.
+Required: `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAIL_FROM`; optional `MAIL_REPLY_TO` and `MAILGUN_API_BASE_URL` (`https://api.mailgun.net` or EU counterpart). Use a domain sending key for production. Store secrets in Secret Manager; never commit `.env.local`. Production reads its own key from the `NEIGHBORVOTE_MAILGUN_API_KEY` secret, separate from the shared personal Mailgun key used for local test mode, so it can be scoped to `neighborvote.online` and rotated on its own. Generated Docker env files under `output/` hold live values; keep them ignored and delete them when no longer needed.
 
 ```sh
 npm run mail:check
@@ -72,13 +72,26 @@ npm audit
 npm run build
 ```
 
-The database test command requires a disposable local database named `neighborvote_test`; it refuses other names/remote hosts. It applies migrations and truncates test data. Unit tests do not contact Mailgun or a geocoder. Integration tests use real PostgreSQL and mocked email delivery. CI runs lint, types, unit/integration tests, a production dependency audit, and a build.
+The database test command requires a disposable local database named `neighborvote_test`; it refuses other names/remote hosts. It applies migrations and truncates test data. Unit tests do not contact Mailgun or a geocoder. Integration tests use real PostgreSQL and mocked email delivery. CI runs lint, types, unit/integration tests, a production dependency audit, and a build, plus a gitleaks secret scan, dependency review on pull requests, and CodeQL. Actions are pinned to commit SHAs and Dependabot proposes weekly npm, Actions and base-image updates.
 
 ## Production release
 
 Read [the production handoff](docs/production-readiness.md) before deployment. The release record is maintained there; application checks do not establish inbox delivery.
 
 `cloudbuild.yaml` builds an image, configures and runs a Cloud Run migration job, then deploys the new service. Configure `_REGION`, `_SERVICE`, `_AR_REPO`, `_CLOUDSQL_INSTANCE`, `_SERVICE_ACCOUNT`, and `_GCS_EXPORT_BUCKET`; `_APP_BASE_URL` defaults to the approved domain. Migration failure stops deployment. The runtime is non-root, uses `npm ci`, validates required production settings, and exposes `/api/health` for startup checks. The migration job bypasses web startup validation and needs only DATABASE_URL.
+
+### How deploys run
+
+Today a Cloud Build GitHub trigger runs `cloudbuild.yaml` on every push to `main`; its substitutions live in the trigger. `.github/workflows/deploy.yml` is the replacement. It re-runs typecheck and unit tests, authenticates to Google Cloud through Workload Identity Federation (no keys stored in GitHub), submits the same `cloudbuild.yaml`, and then checks `https://neighborvote.online/api/health`. Until the switch-over it runs only when started by hand (Actions → Deploy → Run workflow).
+
+One-time setup before using it:
+
+1. Create the `neighborvote-deployer` service account in `permitting-ai-helper` with permission to submit Cloud Build jobs and to act as the Cloud Build service account, and let the Cloud Build service account deploy/execute Cloud Run services and jobs and act as `neighborvote-runtime`.
+2. Allow this repository on the `github` / `github-oidc` Workload Identity provider and grant `roles/iam.workloadIdentityUser` on `neighborvote-deployer` to `principalSet://iam.googleapis.com/projects/650621702399/locations/global/workloadIdentityPools/github/attribute.repository/direwolfvm/neighborvote`.
+3. Create a `production` GitHub environment limited to `main`, with the variables `CLOUDSQL_INSTANCE` and `GCS_EXPORT_BUCKET` (the same values the Cloud Build trigger uses). They are names, not secrets.
+4. Run the workflow by hand once. When it passes, disable the Cloud Build trigger and add `push: branches: [main]` to `deploy.yml`, so a merge never deploys twice.
+
+Maintenance releases that need `_ALLOW_COMMUNITY_MIGRATION=true` stay a manual `gcloud builds submit`, as described below.
 
 **The first community migration needs a maintenance release window.** The proof-of-concept revision is not compatible with the new required community columns and staff constraint. The migration refuses a populated production database unless `_ALLOW_COMMUNITY_MIGRATION=true` is explicitly supplied to the build. Stop writes/traffic from the old revision before applying 0008, then route traffic to the new image. Do not roll the old image back onto the migrated schema. Back up the database first and restore the pre-migration backup if that rollback is necessary. Later compatible migrations may use the normal job-before-deploy workflow.
 
