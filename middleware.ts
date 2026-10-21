@@ -36,24 +36,30 @@ async function verifySessionToken(token: string): Promise<{ email: string; exp: 
   if (!payload) return null;
   if (payload.exp <= Math.floor(Date.now() / 1000)) return null;
 
+  let signatureBytes: Uint8Array<ArrayBuffer>;
+  try {
+    signatureBytes = Uint8Array.from(atob(base64UrlToBase64(signature)), (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+
+  // crypto.subtle.verify compares the MAC in constant time; comparing two
+  // base64 strings with !== would not.
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["verify"]
   );
-  const expectedSigRaw = await crypto.subtle.sign(
+  const valid = await crypto.subtle.verify(
     "HMAC",
     key,
+    signatureBytes,
     new TextEncoder().encode(encodedPayload)
   );
-  const expectedSig = btoa(String.fromCharCode(...new Uint8Array(expectedSigRaw)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
 
-  if (expectedSig !== signature) return null;
+  if (!valid) return null;
   return payload;
 }
 
