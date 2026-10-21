@@ -82,14 +82,9 @@ Read [the production handoff](docs/production-readiness.md) before deployment. T
 
 ### How deploys run
 
-Today a Cloud Build GitHub trigger runs `cloudbuild.yaml` on every push to `main`; its substitutions live in the trigger. `.github/workflows/deploy.yml` is the replacement. It re-runs typecheck and unit tests, authenticates to Google Cloud through Workload Identity Federation (no keys stored in GitHub), submits the same `cloudbuild.yaml`, and then checks `https://neighborvote.online/api/health`. Until the switch-over it runs only when started by hand (Actions → Deploy → Run workflow).
+`.github/workflows/deploy.yml` deploys every push to `main` (and can be started by hand from Actions → Deploy). It re-runs typecheck and unit tests, authenticates to Google Cloud through Workload Identity Federation as `neighborvote-deployer` (no keys stored in GitHub), submits `cloudbuild.yaml`, and then checks `https://neighborvote.online/api/health`. It runs in the `production` GitHub environment, which only allows `main` and holds the non-secret variables `CLOUDSQL_INSTANCE` and `GCS_EXPORT_BUCKET`.
 
-One-time setup before using it:
-
-1. Create the `neighborvote-deployer` service account in `permitting-ai-helper` with permission to submit Cloud Build jobs and to act as the Cloud Build service account, and let the Cloud Build service account deploy/execute Cloud Run services and jobs and act as `neighborvote-runtime`.
-2. Allow this repository on the `github` / `github-oidc` Workload Identity provider and grant `roles/iam.workloadIdentityUser` on `neighborvote-deployer` to `principalSet://iam.googleapis.com/projects/650621702399/locations/global/workloadIdentityPools/github/attribute.repository/direwolfvm/neighborvote`.
-3. Create a `production` GitHub environment limited to `main`, with the variables `CLOUDSQL_INSTANCE` and `GCS_EXPORT_BUCKET` (the same values the Cloud Build trigger uses). They are names, not secrets.
-4. Run the workflow by hand once. When it passes, disable the Cloud Build trigger and add `push: branches: [main]` to `deploy.yml`, so a merge never deploys twice.
+The Cloud Build GitHub trigger that used to deploy `main` is disabled, not deleted. Keep it disabled while this workflow runs on push, or each merge will deploy twice.
 
 Maintenance releases that need `_ALLOW_COMMUNITY_MIGRATION=true` stay a manual `gcloud builds submit`, as described below.
 
@@ -103,4 +98,4 @@ Migration 0008 places existing elections, members, and staff in the default comm
 
 Export bundles contain identifiable `votes.csv`, aggregate `results.csv` (electronic + manual totals), and a SHA-256 manifest. Files are private in GCS and downloads use short-lived signed URLs. Spreadsheet formula prefixes are neutralized. Manual counts are administrative totals; operators must prevent paper/electronic double counting. Agree on the association’s retention and correction process before launch.
 
-For an incompatible upgrade, build the release image first. Temporarily pause the build trigger and notification scheduler, route all traffic to that image with `node scripts/maintenance.mjs`, wait for requests to the old revision to drain, and take the pre-upgrade backup. Run the migration job with the explicit gate, then deploy the image with its default command. Restore the scheduler and automatic deployment only after health and data-preservation checks pass.
+For an incompatible upgrade, build the release image first. Temporarily disable the Deploy workflow (`gh workflow disable deploy.yml`) and pause the notification scheduler, route all traffic to that image with `node scripts/maintenance.mjs`, wait for requests to the old revision to drain, and take the pre-upgrade backup. Run the migration job with the explicit gate, then deploy the image with its default command. Restore the scheduler and automatic deployment only after health and data-preservation checks pass.
