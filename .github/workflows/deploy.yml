@@ -7,12 +7,13 @@
 # environment only allows deployments from main. There are no long-lived cloud
 # keys stored in GitHub.
 #
-# Manual only for now. The Cloud Build GitHub trigger still deploys on push to
-# main; add `push: branches: [main]` here only after that trigger is disabled,
-# so a merge never deploys twice.
+# This replaced the Cloud Build GitHub trigger, which is kept disabled; never
+# re-enable it while this workflow runs on push, or a merge deploys twice.
 name: Deploy
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
