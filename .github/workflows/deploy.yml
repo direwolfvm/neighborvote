@@ -96,7 +96,19 @@ jobs:
           revision=$(gcloud run services describe "$SERVICE" \
             --region "$GCP_REGION" --project "$GCP_PROJECT" \
             --format 'value(status.latestReadyRevisionName)')
-          echo "Serving revision: $revision"
+          # A traffic pin (update-traffic --to-revisions) makes deploys succeed without
+          # serving the new revision, so require 100% of traffic on the latest one.
+          serving=$(gcloud run services describe "$SERVICE" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT" --format json \
+            | jq -r --arg rev "$revision" '[.status.traffic[] | select((.revisionName == $rev or .latestRevision == true) and .percent == 100)] | length')
+          if [ "$serving" != "1" ]; then
+            echo "Revision $revision is ready but not serving 100% of traffic. Current split:" >&2
+            gcloud run services describe "$SERVICE" --region "$GCP_REGION" --project "$GCP_PROJECT" \
+              --format 'table(status.traffic[].revisionName,status.traffic[].percent,status.traffic[].latestRevision)' >&2
+            echo "Move traffic with: gcloud run services update-traffic $SERVICE --to-latest" >&2
+            exit 1
+          fi
+          echo "Serving revision: $revision (100% of traffic)"
           for attempt in $(seq 1 12); do
             if curl --fail --silent --show-error "$APP_URL/api/health"; then
               echo
