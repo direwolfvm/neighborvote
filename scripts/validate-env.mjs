@@ -5,7 +5,6 @@ const required = [
   "ADMIN_EMAILS",
   "ADMIN_SESSION_SECRET",
   "MEMBER_SESSION_SECRET",
-  "CRON_JOB_TOKEN",
   "MAIL_FROM",
   "MAILGUN_API_KEY",
   "MAILGUN_DOMAIN",
@@ -14,8 +13,14 @@ const required = [
 const invalid = required.filter(
   (name) => !process.env[name]?.trim() || /^(replace-|key-xxxx|<)/.test(process.env[name])
 );
-for (const key of ["ADMIN_SESSION_SECRET", "MEMBER_SESSION_SECRET", "CRON_JOB_TOKEN"])
+for (const key of ["ADMIN_SESSION_SECRET", "MEMBER_SESSION_SECRET"])
   if ((process.env[key]?.length || 0) < 32) invalid.push(key);
+// The notification cron authenticates with Cloud Scheduler's ID token (CRON_INVOKER_EMAIL)
+// or the legacy x-cron-token (CRON_JOB_TOKEN); at least one must be configured.
+const cronToken = process.env.CRON_JOB_TOKEN?.trim();
+const cronInvoker = process.env.CRON_INVOKER_EMAIL?.trim();
+if (cronToken && (cronToken.length < 32 || /^replace-/.test(cronToken))) invalid.push("CRON_JOB_TOKEN");
+if (!cronToken && !cronInvoker) invalid.push("CRON_JOB_TOKEN or CRON_INVOKER_EMAIL");
 try {
   const url = new URL(process.env.APP_BASE_URL);
   if (

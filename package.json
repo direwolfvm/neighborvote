@@ -22,6 +22,7 @@
     "@turf/boolean-point-in-polygon": "^7.4.0",
     "@turf/boolean-valid": "^7.4.0",
     "drizzle-orm": "^0.45.4",
+    "jose": "^6.2.13",
     "next": "^15.5.25",
     "pg": "^8.23.1",
     "react": "^19.3.1",
